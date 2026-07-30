@@ -79,6 +79,31 @@ void main() {
       expect(unit.position.y, closeTo(100, 0.001));
     });
 
+    test('arrival fires once even if the unit is updated again', () {
+      // removeFromParent only queues the removal, so a unit sitting on its
+      // target keeps being updated for a frame or two. Without a guard it would
+      // "arrive" repeatedly and land its hit on the node again each time.
+      final unit = _infantry(from: Vector2.zero(), to: Vector2(10, 0));
+      var arrivals = 0;
+      unit.onArrived = (_) => arrivals++;
+
+      _tick(unit, 3.0);
+
+      expect(arrivals, 1);
+    });
+
+    test('a defeated unit never arrives', () {
+      final unit = _infantry(from: Vector2.zero(), to: Vector2(10, 0));
+      var arrivals = 0;
+      unit.onArrived = (_) => arrivals++;
+
+      unit.remainingPower = 0;
+      _tick(unit, 3.0);
+
+      expect(arrivals, 0);
+      expect(unit.position, Vector2.zero(), reason: 'it should stop moving');
+    });
+
     test('moveTo copies the vector rather than aliasing it', () {
       final target = Vector2(1000, 0);
       final unit = _infantry(from: Vector2.zero(), to: Vector2(500, 0));

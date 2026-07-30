@@ -1,5 +1,7 @@
+import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flame/collisions.dart';
 import 'package:flame/components.dart';
 
 import '../../constants/asset_paths.dart';
@@ -17,7 +19,7 @@ import '../../managers/asset_manager.dart';
 /// the art has not been produced yet. It renders its grayscale sprite through
 /// the faction tint when one exists, and a placeholder shape through the same
 /// faction paint until then.
-class Unit extends PositionComponent {
+class Unit extends PositionComponent with CollisionCallbacks {
   /// Unit class: `infantry`, `heavy_soldier`, `scout`.
   final String type;
 
@@ -42,13 +44,31 @@ class Unit extends PositionComponent {
   /// Pixels per second.
   double speed;
 
-  /// Contribution to combat resolution. Unused in the MVP (path combat and
-  /// capture arrive in Milestone 2) but carried so the value has one home.
+  /// The unit class's combat power stat (balance §2.1). Never consumed — it is
+  /// the value [remainingPower] starts from.
   double combatPower;
 
-  /// Called once the unit reaches its destination, before it despawns. Lets the
-  /// game clear the unit from its route without the unit knowing about routes.
+  /// Combat power this unit still has. Reduced by clashes on the path, and it
+  /// is what actually lands on a node when the unit arrives.
+  double remainingPower;
+
+  /// Called when the unit reaches its destination — and only then, so a unit
+  /// killed on the way never lands a hit on the target node.
   void Function(Unit unit)? onArrived;
+
+  /// Called when the unit leaves the game for any reason, arrival or defeat.
+  /// Lets the game clear it from its route without the unit knowing routes
+  /// exist. Fires from Flame's own removal lifecycle, so it cannot be missed.
+  void Function(Unit unit)? onDespawn;
+
+  /// True once the unit has been resolved away by combat, so an already-dead
+  /// unit cannot keep fighting during the same frame.
+  bool get isDefeated => remainingPower <= 0;
+
+  /// Guards against acting twice. `removeFromParent` only *queues* the removal,
+  /// so without this a unit sitting on its target would re-arrive — and land
+  /// its hit again — on every frame until the queue is processed.
+  bool _isSpent = false;
 
   Unit({
     required this.type,
@@ -61,11 +81,16 @@ class Unit extends PositionComponent {
     this.combatPower = 1.0,
     super.anchor = Anchor.center,
   })  : faction = faction,
+        remainingPower = combatPower,
         tintPaint = FactionManager().getPaint(faction);
 
   @override
   Future<void> onLoad() async {
     await super.onLoad();
+
+    // Hitbox drives path combat. Flame's broadphase already handles the
+    // pairing, and it keeps working once multi-node maps create crossing lanes.
+    add(CircleHitbox(collisionType: CollisionType.active));
 
     final assets = AssetManager();
     baseSprite = await assets.tryLoadSprite(
@@ -79,6 +104,8 @@ class Unit extends PositionComponent {
   @override
   void update(double dt) {
     super.update(dt);
+
+    if (_isSpent || isDefeated) return;
 
     final toTarget = targetPosition - position;
     final distance = toTarget.length;
@@ -108,13 +135,66 @@ class Unit extends PositionComponent {
     detailSprite?.render(canvas, size: size);
   }
 
-  /// Called once the unit reaches [targetPosition].
+  @override
+  void onCollisionStart(
+    Set<Vector2> intersectionPoints,
+    PositionComponent other,
+  ) {
+    super.onCollisionStart(intersectionPoints, other);
+
+    if (other is! Unit || other.faction == faction) return;
+
+    clashWith(other);
+  }
+
+  /// Resolves a clash with an opposing [other] on the path.
   ///
-  /// The MVP simply despawns; Milestone 2 replaces this with damage against the
-  /// target node and the capture check.
+  /// Both units lose the lesser of their two remaining powers; whichever still
+  /// has power left carries on. This discrete, pairwise rule reproduces the
+  /// *group* formula in balance §3.1 exactly, without needing to gather units
+  /// into groups first. Both worked examples from that section fall out of it:
+  ///
+  ///  - 10 Infantry (1.0) meet 5 Heavy Soldiers (2.0): each Heavy absorbs two
+  ///    Infantry before dying, so all 15 units are lost and none arrive.
+  ///  - 10 Infantry meet 4 Infantry: four mutual kills, and 6 continue on.
+  ///
+  /// Both units receive `onCollisionStart` for the same pair, so the defeated
+  /// check makes the second call a no-op rather than double-resolving.
+  void clashWith(Unit other) {
+    if (isDefeated || other.isDefeated) return;
+
+    final absorbed = math.min(remainingPower, other.remainingPower);
+    remainingPower -= absorbed;
+    other.remainingPower -= absorbed;
+
+    if (isDefeated) {
+      onDefeated();
+    }
+    if (other.isDefeated) {
+      other.onDefeated();
+    }
+  }
+
+  /// Called when the unit is destroyed in combat rather than arriving. It never
+  /// reaches its target, so [onArrived] deliberately does not fire.
+  void onDefeated() {
+    if (_isSpent) return;
+    _isSpent = true;
+    removeFromParent();
+  }
+
+  /// Called once the unit reaches [targetPosition].
   void onReachedTarget() {
+    if (_isSpent) return;
+    _isSpent = true;
     onArrived?.call(this);
     removeFromParent();
+  }
+
+  @override
+  void onRemove() {
+    onDespawn?.call(this);
+    super.onRemove();
   }
 
   void moveTo(Vector2 target) {

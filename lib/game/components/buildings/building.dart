@@ -53,6 +53,11 @@ class Building extends PositionComponent with TapCallbacks {
   double generationRate;
   int maxCapacity;
 
+  /// Multiplies units inside into defence value (balance §1.1). Barracks 1.0x;
+  /// Tower 1.5x, Factory 1.2x and Command Center 2.0x arrive with the building
+  /// types in Milestone 2.
+  double defenseMultiplier;
+
   /// True while this node is the selected source for a unit send.
   bool isSelected = false;
 
@@ -68,6 +73,14 @@ class Building extends PositionComponent with TapCallbacks {
   /// transferring whole units fixes it and keeps generation frame-rate
   /// independent.
   double _genAccumulator = 0;
+
+  /// Partial defence damage carried between hits.
+  ///
+  /// Defence is `unitsInside * defenseMultiplier`, so an attack rarely removes
+  /// a whole number of units — against a 1.5x Tower, 10 combat power clears
+  /// 6.67 units. Carrying the remainder here keeps the unit count an honest
+  /// integer without silently discarding or inventing fractions of a unit.
+  double _defenseFraction = 0;
 
   static final _counterTextPaint = TextPaint(
     style: const TextStyle(
@@ -86,6 +99,7 @@ class Building extends PositionComponent with TapCallbacks {
     this.unitsInside = 0,
     this.generationRate = 1.0,
     this.maxCapacity = 50,
+    this.defenseMultiplier = 1.0,
     super.anchor = Anchor.center,
   })  : faction = faction,
         tintPaint = FactionManager().getPaint(faction);
@@ -155,6 +169,39 @@ class Building extends PositionComponent with TapCallbacks {
     return taken;
   }
 
+  /// Adds units from a friendly arrival, clamped to capacity.
+  ///
+  /// Returns how many were actually absorbed — a full node turns reinforcements
+  /// away rather than exceeding [maxCapacity].
+  int reinforce(int count) {
+    final absorbed = count.clamp(0, maxCapacity - unitsInside);
+    unitsInside += absorbed;
+    return absorbed;
+  }
+
+  /// Applies [power] combat power from [attackerFaction] against this node.
+  ///
+  /// Follows balance §3.2: damage reduces [defenseValue], and the node is
+  /// captured the moment its defence reaches zero. Returns whether that
+  /// happened. Attacking a node that already belongs to [attackerFaction] does
+  /// nothing — that case is a reinforcement, see [reinforce].
+  bool applyAttack(double power, String attackerFaction) {
+    if (attackerFaction == faction || power <= 0) return false;
+
+    // Work in defence points, then convert back to whole units.
+    final remainingDefense = defenseValue - power;
+
+    if (remainingDefense <= 0) {
+      _capture(attackerFaction);
+      return true;
+    }
+
+    final unitsRemaining = remainingDefense / defenseMultiplier;
+    unitsInside = unitsRemaining.floor();
+    _defenseFraction = unitsRemaining - unitsInside;
+    return false;
+  }
+
   /// Switches ownership and refreshes the cached tint. Used on capture.
   void changeFaction(String newFaction) {
     faction = newFaction;
@@ -162,9 +209,18 @@ class Building extends PositionComponent with TapCallbacks {
   }
 
   /// Defence value = units inside × the building's defence multiplier
-  /// (balance §1.3). The MVP has no capture, so the multiplier is a flat 1.0x
-  /// Barracks value; per-type multipliers arrive with Milestone 2.
-  double get defenseValue => unitsInside * 1.0;
+  /// (balance §1.3), including any partial unit left over from a previous hit.
+  double get defenseValue =>
+      (unitsInside + _defenseFraction) * defenseMultiplier;
+
+  /// Balance §3.2: the node flips faction, resets to zero units, and starts
+  /// generating for its new owner.
+  void _capture(String newFaction) {
+    changeFaction(newFaction);
+    unitsInside = 0;
+    _defenseFraction = 0;
+    _genAccumulator = 0;
+  }
 
   /// Draws a stand-in for `<type>_tier<N>_base.png`.
   ///
