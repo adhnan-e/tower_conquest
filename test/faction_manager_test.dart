@@ -20,8 +20,8 @@ void main() {
       );
     });
 
-    test('falls back to multiply for an unknown blend mode', () {
-      expect(FactionColors.getBlendMode('not_a_mode'), ui.BlendMode.multiply);
+    test('falls back to the default for an unknown blend mode', () {
+      expect(FactionColors.getBlendMode('not_a_mode'), ui.BlendMode.modulate);
     });
   });
 
@@ -44,25 +44,24 @@ void main() {
       expect(player, isNot(same(enemy)));
     });
 
-    test('keys shade paints by gray level as well as faction', () {
-      final white = FactionManager().getShadePaint('player', 0xFF);
-      final shade = FactionManager().getShadePaint('player', 0x88);
-
-      expect(white, isNot(same(shade)));
-      expect(white, same(FactionManager().getShadePaint('player', 0xFF)));
-      // Compared as packed ARGB: Color holds floating-point components, so two
-      // Colors that describe the same pixel are not necessarily ==.
-      expect(white.color.toARGB32(), 0xFFFFFFFF);
-      expect(shade.color.toARGB32(), 0xFF888888);
+    test('tints with modulate, which preserves transparency', () {
+      // multiply turns transparent pixels into an opaque faction-coloured
+      // square; modulate multiplies alpha too, so the sprite keeps its shape.
+      // See FactionColors.defaultBlendMode.
+      expect(FactionColors.defaultBlendMode, 'modulate');
+      expect(
+        FactionColors.getBlendMode(FactionColors.defaultBlendMode),
+        ui.BlendMode.modulate,
+      );
+      expect(FactionManager().getPaint('player').colorFilter, isNotNull);
     });
 
-    test('shade paints carry the faction colour filter', () {
-      // A drawn shape takes its source colour from paint.color, so without an
-      // explicit gray the default opaque black would multiply down to black.
-      final paint = FactionManager().getShadePaint('enemy', 0xFF);
+    test('an explicit blend mode is honoured and cached separately', () {
+      final byDefault = FactionManager().getPaint('player');
+      final multiplied =
+          FactionManager().getPaint('player', blendMode: 'multiply');
 
-      expect(paint.colorFilter, isNotNull);
-      expect(paint.color.toARGB32(), 0xFFFFFFFF);
+      expect(byDefault, isNot(same(multiplied)));
     });
 
     test('clearCache drops cached instances', () {

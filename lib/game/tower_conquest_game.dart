@@ -3,9 +3,11 @@ import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 
+import 'constants/asset_paths.dart';
 import 'components/buildings/building.dart';
 import 'components/map/path_link.dart';
 import 'components/units/unit.dart';
+import 'managers/asset_manager.dart';
 import 'managers/enemy_commander.dart';
 import 'screens/result_overlay.dart';
 
@@ -57,6 +59,11 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
     camera.viewfinder
       ..anchor = Anchor.center
       ..position = Vector2.zero();
+
+    // Decode the whole Phase 1 art pack before anything mounts. Units spawn
+    // mid-match and have no placeholder to fall back on, so a first-use decode
+    // would leave them invisible for a frame or two.
+    await AssetManager().preload(AssetPaths.phase1Sprites());
 
     // The game registers its own result screen rather than relying on the
     // GameWidget to supply it, so the match can end correctly whether or not

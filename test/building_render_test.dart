@@ -4,6 +4,12 @@ import 'dart:ui' as ui;
 import 'package:flame/components.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tower_conquest/game/components/buildings/building.dart';
+import 'package:tower_conquest/game/constants/asset_paths.dart';
+import 'package:tower_conquest/game/managers/asset_manager.dart';
+
+// Renders the real Phase 1 sprites and checks the runtime-tinting contract
+// holds against the art that actually shipped: base layers take the faction
+// colour, detail layers never do, and nothing bleeds outside the silhouette.
 
 const _size = 96;
 
@@ -13,7 +19,7 @@ Building _barracks({
   int unitsInside = 0,
   bool isSelected = false,
 }) {
-  return Building(
+  final building = Building(
     type: type,
     tier: 1,
     faction: faction,
@@ -21,12 +27,14 @@ Building _barracks({
     size: Vector2.all(_size.toDouble()),
     unitsInside: unitsInside,
   )..isSelected = isSelected;
+
+  final assets = AssetManager();
+  building.baseSprite = assets.sprite(AssetPaths.getBuildingBasePath(type, 1));
+  building.detailSprite =
+      assets.sprite(AssetPaths.getBuildingDetailPath(type, 1));
+  return building;
 }
 
-/// Renders [building] to raw RGBA bytes.
-///
-/// No sprite is loaded (the art has not been produced yet), so this exercises
-/// the placeholder path — the same faction `Paint` the real sprites will use.
 Future<Uint8List> _render(Building building) async {
   final recorder = ui.PictureRecorder();
   building.render(ui.Canvas(recorder));
@@ -35,7 +43,6 @@ Future<Uint8List> _render(Building building) async {
   return data!.buffer.asUint8List();
 }
 
-/// RGBA of the pixel at ([x], [y]).
 ({int r, int g, int b, int a}) _pixel(Uint8List bytes, int x, int y) {
   final i = (y * _size + x) * 4;
   return (r: bytes[i], g: bytes[i + 1], b: bytes[i + 2], a: bytes[i + 3]);
@@ -49,52 +56,124 @@ int _diffCount(Uint8List a, Uint8List b) {
   return diff;
 }
 
+/// Pixels that are opaque and identical between the two renders — i.e. the
+/// parts the faction tint did not touch.
+int _sharedOpaquePixels(Uint8List a, Uint8List b) {
+  var shared = 0;
+  for (var i = 0; i < a.length; i += 4) {
+    if (a[i + 3] < 250) continue;
+    if (a[i] == b[i] && a[i + 1] == b[i + 1] && a[i + 2] == b[i + 2]) {
+      shared++;
+    }
+  }
+  return shared;
+}
+
 void main() {
-  group('Building placeholder rendering', () {
-    test('draws a visible body when no sprite is available', () async {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  setUpAll(() async {
+    AssetManager().reset();
+    await AssetManager().preload(AssetPaths.phase1Sprites());
+  });
+
+  group('Phase 1 art is wired up', () {
+    test('every building type has both layers bundled', () {
+      for (final type in AssetPaths.buildingTypes) {
+        expect(
+          AssetManager().sprite(AssetPaths.getBuildingBasePath(type, 1)),
+          isNotNull,
+          reason: '$type base layer missing',
+        );
+        expect(
+          AssetManager().sprite(AssetPaths.getBuildingDetailPath(type, 1)),
+          isNotNull,
+          reason: '$type detail layer missing',
+        );
+      }
+    });
+
+    test('every unit class has both layers bundled', () {
+      for (final type in AssetPaths.unitTypes) {
+        expect(
+          AssetManager().sprite(AssetPaths.getUnitBasePath(type, 1)),
+          isNotNull,
+          reason: '$type base layer missing',
+        );
+        expect(
+          AssetManager().sprite(AssetPaths.getUnitDetailPath(type, 1)),
+          isNotNull,
+          reason: '$type detail layer missing',
+        );
+      }
+    });
+
+    test('a tier with no art yet renders nothing rather than crashing', () {
+      // Tiers 2-5 ship in Phase 2. Until then the sprite is absent, and with
+      // the placeholders gone the node simply draws no body.
+      expect(
+        AssetManager().sprite(AssetPaths.getBuildingBasePath('barracks', 2)),
+        isNull,
+      );
+    });
+  });
+
+  group('Runtime tinting', () {
+    test('the sprite body draws opaque pixels', () async {
       final bytes = await _render(_barracks());
 
-      // Centre of the body must be opaque, not an empty canvas.
       expect(_pixel(bytes, 48, 48).a, 255);
     });
 
-    test('tints the player body blue through the multiply filter', () async {
-      final bytes = await _render(_barracks(faction: 'player'));
-      final px = _pixel(bytes, 48, 48);
+    test('the player body reads blue', () async {
+      final px = _pixel(await _render(_barracks(faction: 'player')), 48, 48);
 
-      // White body x #2D8CFF should come out as that blue.
+      // Grayscale x #2D8CFF under multiply.
       expect(px.b, greaterThan(px.g));
       expect(px.g, greaterThan(px.r));
     });
 
-    test('tints the enemy body red through the multiply filter', () async {
-      final bytes = await _render(_barracks(faction: 'enemy'));
-      final px = _pixel(bytes, 48, 48);
+    test('the enemy body reads red', () async {
+      final px = _pixel(await _render(_barracks(faction: 'enemy')), 48, 48);
 
-      // White body x #E74C3C should come out as that red.
+      // Grayscale x #E74C3C under multiply.
       expect(px.r, greaterThan(px.g));
       expect(px.r, greaterThan(px.b));
     });
 
-    test('player and enemy nodes render differently', () async {
+    test('player and enemy nodes are visibly different', () async {
       final player = await _render(_barracks(faction: 'player'));
       final enemy = await _render(_barracks(faction: 'enemy'));
 
-      expect(_diffCount(player, enemy), greaterThan(0));
+      // Not merely different — different across a large share of the sprite,
+      // or the two factions would be hard to tell apart in play.
+      expect(_diffCount(player, enemy), greaterThan(2000));
     });
 
-    test('the mid-gray band renders as a shade of the faction colour',
-        () async {
-      final bytes = await _render(_barracks(faction: 'player'));
-      final band = _pixel(bytes, 48, 18); // inside the roof band
-      final body = _pixel(bytes, 48, 48);
+    test('the detail layer is identical on both factions', () async {
+      final player = await _render(_barracks(faction: 'player'));
+      final enemy = await _render(_barracks(faction: 'enemy'));
 
-      // 0x88 gray multiplied by the faction colour is the same hue, darker.
-      expect(band.b, lessThan(body.b));
-      expect(band.b, greaterThan(band.r));
+      // The untinted charcoal and gold pixels must survive the recolour
+      // byte-for-byte. If the tint leaked onto the detail layer this would be
+      // near zero.
+      expect(_sharedOpaquePixels(player, enemy), greaterThan(500));
     });
 
-    test('building types produce distinct silhouettes', () async {
+    test('every building type tints', () async {
+      for (final type in AssetPaths.buildingTypes) {
+        final player = await _render(_barracks(type: type, faction: 'player'));
+        final enemy = await _render(_barracks(type: type, faction: 'enemy'));
+
+        expect(
+          _diffCount(player, enemy),
+          greaterThan(0),
+          reason: '$type does not change with faction',
+        );
+      }
+    });
+
+    test('building types have distinct silhouettes', () async {
       final barracks = await _render(_barracks(type: 'barracks'));
       final tower = await _render(_barracks(type: 'tower'));
       final factory = await _render(_barracks(type: 'factory'));
@@ -105,17 +184,31 @@ void main() {
     });
   });
 
-  group('Building overlays', () {
-    test('the unit counter is actually drawn', () async {
+  group('No artefacts', () {
+    test('the corners stay fully transparent', () async {
+      final bytes = await _render(_barracks());
+
+      // The art has an alpha-0 background; a green or black matte would show
+      // up here as opaque pixels.
+      for (final corner in [(0, 0), (_size - 1, 0), (0, _size - 1)]) {
+        expect(
+          _pixel(bytes, corner.$1, corner.$2).a,
+          0,
+          reason: 'opaque pixel at ${corner.$1},${corner.$2}',
+        );
+      }
+    });
+  });
+
+  group('Overlays', () {
+    test('the unit counter is drawn over the sprite', () async {
       final empty = await _render(_barracks(unitsInside: 0));
       final full = await _render(_barracks(unitsInside: 88));
 
-      // Different counter values must change the output; if the text silently
-      // failed to draw these would be byte-identical.
       expect(_diffCount(empty, full), greaterThan(0));
     });
 
-    test('the selection ring is actually drawn', () async {
+    test('the selection ring is drawn over the sprite', () async {
       final plain = await _render(_barracks());
       final selected = await _render(_barracks(isSelected: true));
 

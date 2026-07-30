@@ -31,6 +31,9 @@ class AssetManager {
   Set<String>? _bundledAssets;
   Future<void>? _loading;
 
+  /// Sprites already decoded, keyed by their path relative to `assets/images/`.
+  final Map<String, Sprite> _sprites = {};
+
   /// Reads the asset manifest once and caches the result.
   Future<void> ensureManifestLoaded() {
     return _loading ??= _loadManifest();
@@ -52,23 +55,54 @@ class AssetManager {
     return _bundledAssets?.contains('$imagePrefix$path') ?? false;
   }
 
+  /// Decodes [paths] up front and holds them for synchronous lookup.
+  ///
+  /// Called once at start-up with [AssetPaths.phase1Sprites]. Without it the
+  /// first unit of each class would decode its PNG mid-match, and — now that
+  /// there is no placeholder to draw in the meantime — would be invisible for
+  /// those frames.
+  Future<void> preload(Iterable<String> paths) async {
+    await ensureManifestLoaded();
+
+    for (final path in paths) {
+      if (_sprites.containsKey(path)) continue;
+      final sprite = await tryLoadSprite(path);
+      if (sprite != null) {
+        _sprites[path] = sprite;
+      }
+    }
+  }
+
+  /// The already-decoded sprite at [path], or null if it was never preloaded
+  /// or is not bundled.
+  Sprite? sprite(String path) => _sprites[path];
+
   /// Loads the sprite at [path], or returns null if it is not bundled.
+  ///
+  /// Prefer [sprite] after [preload]; this remains for paths outside the
+  /// preloaded set, such as the Tier 2-5 art that Phase 2 will deliver.
   Future<Sprite?> tryLoadSprite(String path) async {
     await ensureManifestLoaded();
     if (!hasImage(path)) return null;
 
+    final cached = _sprites[path];
+    if (cached != null) return cached;
+
     try {
-      return await Sprite.load(path);
+      final sprite = await Sprite.load(path);
+      _sprites[path] = sprite;
+      return sprite;
     } catch (_) {
       // Listed but unreadable (truncated or corrupt file). Still no reason to
-      // take the whole game down — fall back to the placeholder.
+      // take the whole game down.
       return null;
     }
   }
 
-  /// Drops the cached manifest. Intended for tests.
+  /// Drops the cached manifest and sprites. Intended for tests.
   void reset() {
     _bundledAssets = null;
     _loading = null;
+    _sprites.clear();
   }
 }

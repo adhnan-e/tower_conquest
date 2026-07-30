@@ -42,4 +42,35 @@ class AssetPaths {
 
   static String getUIButtonDetailPath(String buttonType) =>
       '${uiDir}ui_button_${buttonType}_detail.png';
+
+  /// Building archetypes with Phase 1 art (balance §1.1).
+  static const List<String> buildingTypes = [
+    'barracks',
+    'tower',
+    'factory',
+    'command_center',
+  ];
+
+  /// Unit classes with Phase 1 art (balance §2.1).
+  static const List<String> unitTypes = [
+    'infantry',
+    'heavy_soldier',
+    'scout',
+  ];
+
+  /// Every sprite delivered in the Phase 1 art pack: the four building types
+  /// and three unit classes, base and detail layers, all at Tier 1.
+  ///
+  /// Preloaded at start-up so components never wait on a decode mid-match —
+  /// see [AssetManager.preload].
+  static List<String> phase1Sprites() => [
+        for (final type in buildingTypes) ...[
+          getBuildingBasePath(type, 1),
+          getBuildingDetailPath(type, 1),
+        ],
+        for (final type in unitTypes) ...[
+          getUnitBasePath(type, 1),
+          getUnitDetailPath(type, 1),
+        ],
+      ];
 }
