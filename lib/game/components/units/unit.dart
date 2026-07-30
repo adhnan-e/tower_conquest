@@ -14,11 +14,12 @@ import '../../managers/asset_manager.dart';
 /// `planning/02_systems/01_GAMEPLAY_SYSTEMS_BALANCE.md` §2.1
 /// (100 px/s, combat power 1.0).
 ///
-/// Like [Building] this extends [PositionComponent] rather than
-/// `SpriteComponent`, because the latter asserts `sprite != null` on mount and
-/// the art has not been produced yet. It renders its grayscale sprite through
-/// the faction tint when one exists, and a placeholder shape through the same
-/// faction paint until then.
+/// Rendered from the Phase 1 art pack: a grayscale base layer drawn through the
+/// faction `ColorFilter`, then an untinted detail layer on top. Native art is
+/// 64x64 and is scaled to this unit's [size].
+///
+/// Extends [PositionComponent] rather than `SpriteComponent` for the reason
+/// given on [Building].
 class Unit extends PositionComponent with CollisionCallbacks {
   /// Unit class: `infantry`, `heavy_soldier`, `scout`.
   final String type;
@@ -28,7 +29,7 @@ class Unit extends PositionComponent with CollisionCallbacks {
   /// Owning faction. Not final — see the note in [Building.faction].
   String faction;
 
-  /// Tintable grayscale layer. Null while the art has not been produced.
+  /// Tintable grayscale layer. Null if this tier's art has not shipped yet.
   Sprite? baseSprite;
 
   /// Fixed-colour layer. Never tinted, always optional.
@@ -125,13 +126,12 @@ class Unit extends PositionComponent with CollisionCallbacks {
 
   @override
   void render(ui.Canvas canvas) {
-    final base = baseSprite;
-    if (base != null) {
-      base.render(canvas, size: size, overridePaint: tintPaint);
-    } else {
-      _renderPlaceholder(canvas);
-    }
+    // Grayscale silhouette through the faction ColorFilter, scaled from its
+    // 64x64 native size down to this unit's [size].
+    baseSprite?.render(canvas, size: size, overridePaint: tintPaint);
 
+    // Detail layer is never tinted — charcoal visors and gold chevrons stay
+    // the same colour on every faction.
     detailSprite?.render(canvas, size: size);
   }
 
@@ -204,21 +204,5 @@ class Unit extends PositionComponent with CollisionCallbacks {
   void changeFaction(String newFaction) {
     faction = newFaction;
     tintPaint = FactionManager().getPaint(faction);
-  }
-
-  /// Draws a stand-in for `<type>_tier<N>_base.png`: a white disc with a
-  /// mid-gray core, drawn through the faction shade paints so the multiply
-  /// tint behaves exactly as it will with the real grayscale sprite.
-  void _renderPlaceholder(ui.Canvas canvas) {
-    final manager = FactionManager();
-    final centre = ui.Offset(size.x / 2, size.y / 2);
-    final radius = size.x / 2;
-
-    canvas.drawCircle(centre, radius, manager.getShadePaint(faction, 0xFF));
-    canvas.drawCircle(
-      centre,
-      radius * 0.45,
-      manager.getShadePaint(faction, 0x88),
-    );
   }
 }

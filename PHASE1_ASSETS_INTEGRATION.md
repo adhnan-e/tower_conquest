@@ -1,5 +1,16 @@
 # Phase 1 Asset Pack Integration Guide
 
+> **Correction — use `BlendMode.modulate`, not `multiply`.**
+> Skia's `multiply` composites the filter colour against the source, so a fully
+> transparent pixel comes out *fully opaque* in the faction colour and the
+> sprite renders as a solid coloured square. Measured on
+> `barracks_tier1_base.png`: transparent corner `(45,140,255)` opaque under
+> `multiply` versus alpha 0 under `modulate`, with an identical body colour of
+> `(38,119,217)`. `modulate` multiplies alpha too, so transparency and
+> antialiased edges survive. The art needs no change — see
+> `FactionColors.defaultBlendMode` in `lib/game/constants/colors.dart`.
+
+
 **Status:** ✅ Complete  
 **Date:** July 30, 2026  
 **Total Files:** 14 PNG assets (8 buildings + 6 units, base + detail layers)  

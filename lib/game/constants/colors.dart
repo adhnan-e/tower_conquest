@@ -4,7 +4,8 @@ import 'dart:ui' as ui;
 ///
 /// The whole visual architecture of Tower Conquest rests on one idea: every
 /// tintable sprite ships as a *grayscale* PNG, and the faction colour is
-/// applied at runtime with `ColorFilter.mode(factionColour, BlendMode.multiply)`.
+/// applied at runtime with `ColorFilter.mode(factionColour, BlendMode.modulate)`
+/// — see [FactionColors.defaultBlendMode] for why not `multiply`.
 /// A single `barracks_tier1_base.png` therefore renders blue for the player and
 /// red for the enemy with no extra art. See
 /// `planning/03_assets/01_ASSET_CATALOG_PRODUCTION.md` §1.
@@ -27,6 +28,7 @@ class FactionColors {
   };
 
   static const Map<String, ui.BlendMode> blendModes = {
+    'modulate': ui.BlendMode.modulate,
     'multiply': ui.BlendMode.multiply,
     'screen': ui.BlendMode.screen,
     'overlay': ui.BlendMode.overlay,
@@ -39,15 +41,36 @@ class FactionColors {
   }
 
   static ui.BlendMode getBlendMode(String blendMode) {
-    return blendModes[blendMode] ?? blendModes['multiply']!;
+    return blendModes[blendMode] ?? blendModes[defaultBlendMode]!;
   }
+
+  /// The blend mode used to tint sprites.
+  ///
+  /// **Not `multiply`, despite what the planning docs say.** Both produce the
+  /// same colour on the sprite body — a grayscale pixel times the faction
+  /// colour — but they differ on transparent pixels, and the Phase 1 art is
+  /// roughly half transparent.
+  ///
+  /// Skia's `multiply` is a separable blend that composites the filter colour
+  /// against the source: a fully transparent pixel comes out **fully opaque**
+  /// in the faction colour, so the sprite renders as a solid coloured square.
+  /// Measured on `barracks_tier1_base.png` at 96x96:
+  ///
+  /// | mode | transparent corner | body |
+  /// | :-- | :-- | :-- |
+  /// | `multiply` | `(45,140,255)` **opaque** | `(38,119,217)` |
+  /// | `modulate` | `(0,0,0)` alpha 0 | `(38,119,217)` |
+  ///
+  /// `modulate` is a straight component-wise multiply including alpha, so
+  /// transparency survives and antialiased edges keep their partial alpha.
+  /// Identical tint, no halo.
+  static const String defaultBlendMode = 'modulate';
 }
 
 /// Caches the `Paint` objects used for runtime faction tinting.
 ///
 /// Building a `Paint` with a `ColorFilter` every frame for every component
-/// would churn the allocator, so both flavours below are cached by key and
-/// reused. **The returned `Paint` instances are shared** — callers must treat
+/// would churn the allocator, so they are cached by key and reused. **The returned `Paint` instances are shared** — callers must treat
 /// them as read-only and never mutate colour, opacity or filter on them.
 class FactionManager {
   static final FactionManager _instance = FactionManager._internal();
@@ -57,11 +80,13 @@ class FactionManager {
   FactionManager._internal();
 
   final Map<String, ui.Paint> _paintCache = {};
-  final Map<String, ui.Paint> _shadePaintCache = {};
 
   /// Tint paint for **sprites**. The sprite's own grayscale pixels supply the
   /// source colour, so this paint only needs to carry the colour filter.
-  ui.Paint getPaint(String faction, {String blendMode = 'multiply'}) {
+  ui.Paint getPaint(
+    String faction, {
+    String blendMode = FactionColors.defaultBlendMode,
+  }) {
     final key = '$faction:$blendMode';
     final cached = _paintCache[key];
     if (cached != null) return cached;
@@ -76,37 +101,7 @@ class FactionManager {
     return paint;
   }
 
-  /// Tint paint for **procedurally drawn placeholder shapes**.
-  ///
-  /// A canvas draw op takes its source colour from `paint.color`, not from a
-  /// sprite, and the default is opaque black — which multiply would crush to
-  /// black. Setting an explicit gray makes a drawn shape behave exactly like a
-  /// grayscale pixel would: [gray] `0xFF` (white) yields the full faction
-  /// colour, `0x80` yields a half-shade of it. That is what lets the shape
-  /// placeholders rehearse the real sprite pipeline, so swapping in the PNGs
-  /// later changes nothing about how colour is produced.
-  ui.Paint getShadePaint(
-    String faction,
-    int gray, {
-    String blendMode = 'multiply',
-  }) {
-    final key = '$faction:$blendMode:$gray';
-    final cached = _shadePaintCache[key];
-    if (cached != null) return cached;
-
-    final paint = ui.Paint()
-      ..color = ui.Color.fromARGB(0xFF, gray, gray, gray)
-      ..colorFilter = ui.ColorFilter.mode(
-        FactionColors.getColor(faction),
-        FactionColors.getBlendMode(blendMode),
-      );
-
-    _shadePaintCache[key] = paint;
-    return paint;
-  }
-
   void clearCache() {
     _paintCache.clear();
-    _shadePaintCache.clear();
   }
 }
