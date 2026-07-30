@@ -1,0 +1,31 @@
+name: tower_conquest
+description: A tactical tower-conquest strategy game built with Flutter and Flame.
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flame: ^1.10.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^2.0.0
+
+flutter:
+  uses-material-design: true
+  # Only the directories the MVP touches are declared. Flutter fails the build
+  # on a declared directory that does not exist, so the remaining catalog
+  # directories (environment, effects, ui, progression, audio, data) are added
+  # alongside the assets that populate them. The two below are seeded with a
+  # .gitkeep so the grayscale PNGs from orchestrator/REQUIRED_PNGS.md can be
+  # dropped in without touching this file.
+  assets:
+    - assets/images/buildings/
+    - assets/images/units/
