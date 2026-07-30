@@ -33,13 +33,23 @@ class TowerConquestApp extends StatelessWidget {
   }
 }
 
-class GameScreen extends StatelessWidget {
+class GameScreen extends StatefulWidget {
   const GameScreen({super.key});
+
+  @override
+  State<GameScreen> createState() => _GameScreenState();
+}
+
+class _GameScreenState extends State<GameScreen> {
+  // Held across rebuilds so the widget tree never restarts the match.
+  late final TowerConquestGame _game = TowerConquestGame();
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: GameWidget(game: TowerConquestGame()),
+      // The result overlay registers itself in TowerConquestGame.onLoad, so it
+      // needs no overlayBuilderMap here.
+      body: GameWidget(game: _game),
     );
   }
 }
