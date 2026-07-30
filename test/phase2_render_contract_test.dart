@@ -78,22 +78,23 @@ void main() {
       expect(sprite, isNotNull);
     });
 
-    test('falls back to Tier 1 when the requested tier has no art yet',
-        () async {
-      // Tier 2 barracks art does not exist in this test's asset bundle.
+    test('loads Tier 2 art when it exists', () async {
+      // Tier 2 barracks art now exists in the bundled assets.
       final tier1 = await AssetManager().buildingBaseSprite('barracks', 1);
       final tier2 = await AssetManager().buildingBaseSprite('barracks', 2);
 
       expect(tier2, isNotNull);
-      expect(tier2, same(tier1));
+      // Tier 2 is a distinct sprite, not a fallback to Tier 1.
+      expect(tier2, isNot(same(tier1)));
     });
 
-    test('the detail layer falls back the same way', () async {
+    test('the detail layer loads Tier 2 art when it exists', () async {
       final tier1 = await AssetManager().buildingDetailSprite('barracks', 1);
       final tier2 = await AssetManager().buildingDetailSprite('barracks', 2);
 
       expect(tier2, isNotNull);
-      expect(tier2, same(tier1));
+      // Tier 2 detail is a distinct sprite, not a fallback to Tier 1.
+      expect(tier2, isNot(same(tier1)));
     });
 
     test('an out-of-range tier clamps into 1-5 rather than throwing', () async {
@@ -144,25 +145,19 @@ void main() {
       expect(building.detailSprite, isNotNull);
     });
 
-    test('upgrading swaps in this tier\'s sprites (Tier 1 fallback today)',
-        () async {
+        test('upgrading swaps in this tier\'s sprites', () async {
       final building = _barracks(unitsInside: 50);
       await building.onLoad();
-
       final spriteBefore = building.baseSprite;
       expect(building.upgrade(), isTrue);
-
       // Building.upgrade() reloads sprites without awaiting (fire-and-forget,
       // documented on upgrade()); flush the microtask queue so the async
       // swap actually lands before we inspect it.
       await Future<void>.delayed(Duration.zero);
-
       expect(building.tier, 2);
-      // No Tier 2 art exists yet, so this must be the *same* Tier 1 sprite
-      // object AssetManager already cached — not null, and not some
-      // half-loaded placeholder state.
+      // Tier 2 art now exists, so this must be a distinct sprite object.
       expect(building.baseSprite, isNotNull);
-      expect(building.baseSprite, same(spriteBefore));
+      expect(building.baseSprite, isNot(same(spriteBefore)));
     });
 
     test('rendering an unrecognised building type draws nothing crash-free',
