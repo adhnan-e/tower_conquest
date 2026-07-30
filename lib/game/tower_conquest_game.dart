@@ -9,17 +9,19 @@ import 'components/map/path_link.dart';
 import 'components/units/unit.dart';
 import 'managers/asset_manager.dart';
 import 'managers/enemy_commander.dart';
+import 'screens/building_info_panel.dart';
 import 'screens/result_overlay.dart';
 
 /// How a match ended, or that it is still running.
 enum GameStatus { playing, victory, defeat }
 
-/// The MVP game: one player node, one enemy node, a visible route between them,
-/// and the full core loop from GDD §2 — generate, deploy, travel, engage,
-/// capture.
+/// The game: one player node, one enemy node, a visible route between them,
+/// the full core loop from GDD §2 — generate, deploy, travel, engage, capture
+/// — building upgrades (Tiers 1-5), and a tactical AI opponent.
 ///
-/// Still Milestone 2+: building types and tiers, in-match upgrades, level
-/// loading from JSON, and the real AI opponent.
+/// Still ahead: additional building types actually placed in a level,
+/// multi-node maps, and level loading from JSON
+/// (`05_levels/01_LEVEL_DESIGN.md` §5).
 class TowerConquestGame extends FlameGame with HasCollisionDetection {
   /// World-space offset of each node from the centre of the screen. Positions
   /// are relative to the origin rather than to `size`, so the layout stays
@@ -39,13 +41,23 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
   /// `paths` array (`05_levels/01_LEVEL_DESIGN.md` §5) rather than hard-coded.
   final List<PathLink> paths = [];
 
-  /// The stand-in opponent — see [EnemyCommander] for why it is not the AI.
-  final EnemyCommander enemyCommander = EnemyCommander();
+  /// The tactical opponent, driving [nodes] it owns via an [AIStrategy] —
+  /// see [EnemyCommander]. Overridable so tests that aren't about the AI can
+  /// swap in an inert one instead of fighting a live opponent for control of
+  /// `enemyBase`.
+  final EnemyCommander enemyCommander;
 
   /// The node currently selected as the source of a send, if any.
   Building? selectedBuilding;
 
   GameStatus status = GameStatus.playing;
+
+  /// Seconds of match time elapsed, reset on [restart]. Feeds the AI
+  /// strategy's upgrade cooldown via [EnemyCommander.update].
+  double elapsedTime = 0;
+
+  TowerConquestGame({EnemyCommander? enemyCommander})
+      : enemyCommander = enemyCommander ?? EnemyCommander();
 
   bool get isMatchOver => status != GameStatus.playing;
 
@@ -60,10 +72,16 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
       ..anchor = Anchor.center
       ..position = Vector2.zero();
 
-    // Decode the whole Phase 1 art pack before anything mounts. Units spawn
-    // mid-match and have no placeholder to fall back on, so a first-use decode
-    // would leave them invisible for a frame or two.
-    await AssetManager().preload(AssetPaths.phase1Sprites());
+    // Decode the whole art pack before anything mounts. Units spawn mid-match
+    // and have no placeholder to fall back on, so a first-use decode would
+    // leave them invisible for a frame or two. Phase 2 sprites (Tiers 2-5)
+    // don't exist yet — AssetManager.preload silently skips anything the
+    // asset manifest doesn't list — so this line needs no further edits once
+    // the orchestrator delivers that art; it just starts preloading.
+    await AssetManager().preload([
+      ...AssetPaths.phase1Sprites(),
+      ...AssetPaths.phase2Sprites(),
+    ]);
 
     // The game registers its own result screen rather than relying on the
     // GameWidget to supply it, so the match can end correctly whether or not
@@ -73,20 +91,33 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
       (_, __) => ResultOverlay(game: this),
     );
 
+    // Shown for as long as a building stays selected — see [_select].
+    overlays.addEntry(
+      BuildingInfoPanel.id,
+      (_, __) => BuildingInfoPanel(game: this),
+    );
+
     // Driven by a component rather than an `update` override: a root FlameGame
     // never calls its own `update` (FlameGame.updateTree skips it when
     // `parent == null`), so an override here would silently never run.
-    await add(_FrameDriver(_runEnemyCommander));
+    await add(_FrameDriver(_onFrame));
 
     await _buildLevel();
   }
 
-  /// Runs the opponent's decisions once per frame.
-  void _runEnemyCommander() {
+  /// Advances match time and runs the opponent's decisions once per frame.
+  void _onFrame(double dt) {
     if (isMatchOver) return;
+
+    elapsedTime += dt;
 
     enemyCommander.update(
       nodes: nodes,
+      gameTime: elapsedTime,
+      hostileUnits: world.children
+          .whereType<Unit>()
+          .where((u) => u.faction != enemyCommander.faction)
+          .toList(),
       send: (from, to) => sendUnit(from: from, to: to) != null,
     );
   }
@@ -186,6 +217,7 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
     overlays.remove(ResultOverlay.id);
     status = GameStatus.playing;
     selectedBuilding = null;
+    elapsedTime = 0;
 
     world.removeAll(world.children.toList());
     nodes.clear();
@@ -228,6 +260,12 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
     await world.addAll([...paths, ...nodes]);
   }
 
+  /// Clears the current selection, exactly as tapping the selected node again
+  /// would. The [BuildingInfoPanel]'s close button goes through this rather
+  /// than reaching into [selectedBuilding] directly, so both paths to closing
+  /// it (tapping the map, tapping the panel) stay in sync.
+  void deselect() => _select(null);
+
   void _select(Building? building) {
     selectedBuilding?.isSelected = false;
     selectedBuilding = building;
@@ -238,18 +276,27 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
     for (final path in paths) {
       path.isHighlighted = building != null && path.touches(building);
     }
+
+    // The info panel tracks selection one-for-one: up while a node is
+    // selected, gone the instant it isn't (deselect, a send, or match end).
+    if (building != null) {
+      overlays.add(BuildingInfoPanel.id);
+    } else {
+      overlays.remove(BuildingInfoPanel.id);
+    }
   }
 }
 
-/// Calls [_tick] once per frame from inside the component tree.
+/// Calls [_tick] once per frame from inside the component tree, passing the
+/// frame's delta time.
 class _FrameDriver extends Component {
-  final void Function() _tick;
+  final void Function(double dt) _tick;
 
   _FrameDriver(this._tick);
 
   @override
   void update(double dt) {
     super.update(dt);
-    _tick();
+    _tick(dt);
   }
 }

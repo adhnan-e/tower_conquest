@@ -1,10 +1,11 @@
+import 'dart:async';
 import 'dart:ui' as ui;
 
 import 'package:flame/components.dart';
 import 'package:flame/events.dart';
 import 'package:flutter/material.dart' show Colors, FontWeight, TextStyle;
 
-import '../../constants/asset_paths.dart';
+import '../../constants/balance.dart';
 import '../../constants/colors.dart';
 import '../../managers/asset_manager.dart';
 
@@ -31,8 +32,9 @@ class Building extends PositionComponent with TapCallbacks {
   /// Building archetype: `barracks`, `tower`, `factory`, `command_center`.
   final String type;
 
-  /// Upgrade tier 1-5. Mutable because upgrading swaps in higher-tier art;
-  /// the MVP never changes it (upgrades land in Milestone 2).
+  /// Upgrade tier, 1-5. Mutated by [upgrade]. Buildings are always constructed
+  /// at Tier 1; see [_baseCapacity] for why constructing directly at a higher
+  /// tier is not supported.
   int tier;
 
   /// Owning faction. Not final — capture reassigns it, which is why the guide's
@@ -52,9 +54,9 @@ class Building extends PositionComponent with TapCallbacks {
   double generationRate;
   int maxCapacity;
 
-  /// Multiplies units inside into defence value (balance §1.1). Barracks 1.0x;
-  /// Tower 1.5x, Factory 1.2x and Command Center 2.0x arrive with the building
-  /// types in Milestone 2.
+  /// Multiplies units inside into defence value (balance §1.1): Barracks
+  /// 1.0x, Tower 1.5x, Factory 1.2x, Command Center 2.0x at Tier 1, scaling
+  /// with [tier] via [upgrade] — see [BuildingBalance].
   double defenseMultiplier;
 
   /// True while this node is the selected source for a unit send.
@@ -81,10 +83,28 @@ class Building extends PositionComponent with TapCallbacks {
   /// integer without silently discarding or inventing fractions of a unit.
   double _defenseFraction = 0;
 
+  /// Tier 1 stats this building was constructed with. [upgrade] recomputes
+  /// [maxCapacity], [generationRate] and [defenseMultiplier] from these every
+  /// time, rather than compounding the previous tier's already-adjusted
+  /// values — see the note on [BuildingBalance] for why that distinction
+  /// matters. Buildings are always constructed at Tier 1 with these as their
+  /// base stats; [upgrade] is the only supported way to move up from there.
+  final int _baseCapacity;
+  final double _baseGenerationRate;
+  final double _baseDefenseMultiplier;
+
   static final _counterTextPaint = TextPaint(
     style: const TextStyle(
       color: Colors.white,
       fontSize: 22,
+      fontWeight: FontWeight.bold,
+    ),
+  );
+
+  static final _tierTextPaint = TextPaint(
+    style: const TextStyle(
+      color: Colors.white,
+      fontSize: 14,
       fontWeight: FontWeight.bold,
     ),
   );
@@ -101,19 +121,24 @@ class Building extends PositionComponent with TapCallbacks {
     this.defenseMultiplier = 1.0,
     super.anchor = Anchor.center,
   })  : faction = faction,
-        tintPaint = FactionManager().getPaint(faction);
+        tintPaint = FactionManager().getPaint(faction),
+        _baseCapacity = maxCapacity,
+        _baseGenerationRate = generationRate,
+        _baseDefenseMultiplier = defenseMultiplier;
 
   @override
   Future<void> onLoad() async {
     await super.onLoad();
+    await _loadSpritesForTier();
+  }
 
+  /// (Re)loads the sprite pair for the current [tier], falling back to Tier 1
+  /// art if this tier's has not been generated yet — see
+  /// [AssetManager.buildingBaseSprite].
+  Future<void> _loadSpritesForTier() async {
     final assets = AssetManager();
-    baseSprite = await assets.tryLoadSprite(
-      AssetPaths.getBuildingBasePath(type, tier),
-    );
-    detailSprite = await assets.tryLoadSprite(
-      AssetPaths.getBuildingDetailPath(type, tier),
-    );
+    baseSprite = await assets.buildingBaseSprite(type, tier);
+    detailSprite = await assets.buildingDetailSprite(type, tier);
   }
 
   @override
@@ -147,6 +172,7 @@ class Building extends PositionComponent with TapCallbacks {
     detailSprite?.render(canvas, size: size);
 
     _renderUnitCounter(canvas);
+    _renderTierIndicator(canvas);
 
     if (isSelected) {
       _renderSelectionRing(canvas);
@@ -198,6 +224,55 @@ class Building extends PositionComponent with TapCallbacks {
     return false;
   }
 
+  /// Cost to upgrade to the next tier, or 0 if this building cannot upgrade
+  /// further (already at [BuildingBalance.maxTier], or [type] is not an
+  /// upgradeable archetype — see [BuildingBalance.isUpgradeable]).
+  int get upgradeCost {
+    if (tier >= BuildingBalance.maxTier) return 0;
+    if (!BuildingBalance.isUpgradeable(type)) return 0;
+    return BuildingBalance.upgradeCostForTier(tier + 1);
+  }
+
+  /// Whether [upgrade] would currently succeed: not already at max tier, an
+  /// upgradeable archetype, and enough units on hand to pay [upgradeCost].
+  bool canUpgrade() {
+    final cost = upgradeCost;
+    return cost > 0 && unitsInside >= cost;
+  }
+
+  /// Upgrades to the next tier, deducting [upgradeCost] from [unitsInside] and
+  /// recalculating [maxCapacity], [generationRate] and [defenseMultiplier]
+  /// from the Tier 1 base — see [BuildingBalance] for why recalculating from
+  /// base, rather than compounding the previous tier's stats, is required for
+  /// correctness. Swaps in this tier's sprites once loaded.
+  ///
+  /// Returns whether the upgrade happened. A no-op (returns false) at max
+  /// tier, on a non-upgradeable archetype, or with insufficient units — the
+  /// same three conditions [canUpgrade] checks.
+  bool upgrade() {
+    if (!canUpgrade()) return false;
+
+    unitsInside -= upgradeCost;
+    tier += 1;
+    _recalculateStats();
+
+    // Fire-and-forget: the current tier's sprites keep rendering (or the
+    // placeholder-free "nothing" if none exist yet) until this resolves.
+    unawaited(_loadSpritesForTier());
+
+    return true;
+  }
+
+  /// Recomputes [maxCapacity], [generationRate] and [defenseMultiplier] for
+  /// the current [tier] from the stored Tier 1 base stats.
+  void _recalculateStats() {
+    maxCapacity = _baseCapacity + BuildingBalance.capacityBonusForTier(tier);
+    generationRate =
+        _baseGenerationRate * BuildingBalance.genRateMultiplierForTier(tier);
+    defenseMultiplier = _baseDefenseMultiplier *
+        BuildingBalance.defenseMultiplierBonusForTier(tier);
+  }
+
   /// Switches ownership and refreshes the cached tint. Used on capture.
   void changeFaction(String newFaction) {
     faction = newFaction;
@@ -223,6 +298,26 @@ class Building extends PositionComponent with TapCallbacks {
       canvas,
       '$unitsInside',
       Vector2(size.x / 2, size.y * 0.66),
+      anchor: Anchor.center,
+    );
+  }
+
+  /// A small "T<n>" badge in the top-left corner, visible at every tier so a
+  /// glance at the map shows what has and hasn't been upgraded yet.
+  void _renderTierIndicator(ui.Canvas canvas) {
+    final badgeRadius = size.x * 0.12;
+    final centre = ui.Offset(badgeRadius + 4, badgeRadius + 4);
+
+    canvas.drawCircle(
+      centre,
+      badgeRadius,
+      ui.Paint()..color = const ui.Color(0xCC000000),
+    );
+
+    _tierTextPaint.render(
+      canvas,
+      'T$tier',
+      Vector2(centre.dx, centre.dy),
       anchor: Anchor.center,
     );
   }

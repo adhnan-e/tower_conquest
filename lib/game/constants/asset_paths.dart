@@ -73,4 +73,25 @@ class AssetPaths {
           getUnitDetailPath(type, 1),
         ],
       ];
+
+  /// Every Tier 2-5 building sprite the Phase 2 upgrade system can display.
+  ///
+  /// None of these exist yet — the orchestrator generates them after this PR
+  /// merges (`planning/04_implementation/02_PHASE2_IMPLEMENTATION_PLAN.md`
+  /// §"Asset Readiness"). Preloading the list anyway is safe and intentional:
+  /// [AssetManager.preload] only decodes paths the asset manifest actually
+  /// lists, so every one of these is silently skipped today, and the moment a
+  /// Tier 2 PNG is bundled, this list already names it and it starts
+  /// preloading with no further code change — the same drop-in property
+  /// [phase1Sprites] gave the Tier 1 art.
+  ///
+  /// Units are not listed: only buildings gain tiers in Phase 2 (units stay
+  /// Tier 1 — see `02_PHASE2_IMPLEMENTATION_PLAN.md` System 2).
+  static List<String> phase2Sprites() => [
+        for (final type in buildingTypes)
+          for (var tier = 2; tier <= 5; tier++) ...[
+            getBuildingBasePath(type, tier),
+            getBuildingDetailPath(type, tier),
+          ],
+      ];
 }
