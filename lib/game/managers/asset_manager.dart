@@ -1,6 +1,9 @@
 import 'package:flame/components.dart';
 import 'package:flutter/services.dart' show AssetManifest, rootBundle;
 
+import '../constants/asset_paths.dart';
+import '../constants/balance.dart';
+
 /// Loads sprites, tolerating art that has not been produced yet.
 ///
 /// The obvious approach — call `Sprite.load` and catch the failure — has two
@@ -97,6 +100,40 @@ class AssetManager {
       // take the whole game down.
       return null;
     }
+  }
+
+  /// The base (tintable) sprite for [type] at [tier], falling back to Tier 1
+  /// art if this tier has not been generated yet (Phase 2 ships buildings
+  /// only at Tier 1; Tiers 2-5 art lands after this PR merges — see
+  /// `orchestrator/PHASE2_DEVELOPER_PROMPT.md`).
+  ///
+  /// Deliberately a distinct method from [sprite], not an overload of it:
+  /// [sprite] is keyed by a full asset path and is already used throughout
+  /// the codebase and its tests, so giving a *different* method the type/tier
+  /// signature avoids colliding with that established, working contract.
+  Future<Sprite?> buildingBaseSprite(String type, int tier) {
+    return _tierAwareSprite(AssetPaths.getBuildingBasePath, type, tier);
+  }
+
+  /// The detail (untinted) sprite for [type] at [tier]. Same Tier 1 fallback
+  /// as [buildingBaseSprite].
+  Future<Sprite?> buildingDetailSprite(String type, int tier) {
+    return _tierAwareSprite(AssetPaths.getBuildingDetailPath, type, tier);
+  }
+
+  Future<Sprite?> _tierAwareSprite(
+    String Function(String type, int tier) pathFor,
+    String type,
+    int tier,
+  ) async {
+    final clampedTier =
+        tier.clamp(BuildingBalance.minTier, BuildingBalance.maxTier);
+
+    final requested = await tryLoadSprite(pathFor(type, clampedTier));
+    if (requested != null) return requested;
+
+    if (clampedTier == BuildingBalance.minTier) return null;
+    return tryLoadSprite(pathFor(type, BuildingBalance.minTier));
   }
 
   /// Drops the cached manifest and sprites. Intended for tests.
