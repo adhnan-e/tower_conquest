@@ -6,6 +6,7 @@ import 'package:flutter/material.dart' show Colors, FontWeight, TextStyle;
 
 import '../../constants/asset_paths.dart';
 import '../../constants/colors.dart';
+import '../../managers/asset_manager.dart';
 
 /// A node on the map: generates units over time, holds them up to a capacity,
 /// and displays its faction through runtime colour tinting.
@@ -15,10 +16,19 @@ import '../../constants/colors.dart';
 /// (capacity 50, generation 1.0 units/s).
 ///
 /// Rendering has two interchangeable sources. When the grayscale PNGs exist it
-/// draws them via `SpriteComponent` with the faction tint. Until then it draws
-/// a placeholder shape through the *same* faction paint, so the colour pipeline
-/// is identical either way and dropping the art in later needs no code change.
-class Building extends SpriteComponent with TapCallbacks {
+/// draws them with the faction tint; until then it draws a placeholder shape
+/// through the *same* faction paint, so the colour pipeline is identical either
+/// way and dropping the art in later needs no code change.
+///
+/// **Why not `SpriteComponent`?** `02_DEVELOPMENT_PROMPT.md` asks for one, but
+/// `SpriteComponent` asserts `sprite != null` when it mounts. With the art not
+/// yet produced that assert fails and the node never mounts — a blank screen in
+/// debug, and a latent trap in release where asserts are stripped. Extending
+/// [PositionComponent] and drawing the sprite here does exactly what
+/// `SpriteComponent` does internally (`Sprite.render` with an override paint)
+/// while tolerating a missing sprite. Once the PNGs ship, switching back is a
+/// one-line change — but there is no reason to.
+class Building extends PositionComponent with TapCallbacks {
   /// Building archetype: `barracks`, `tower`, `factory`, `command_center`.
   final String type;
 
@@ -37,7 +47,7 @@ class Building extends SpriteComponent with TapCallbacks {
   Sprite? detailSprite;
 
   /// Shared, cached tint paint. Treated as read-only — see [FactionManager].
-  late ui.Paint tintPaint;
+  ui.Paint tintPaint;
 
   int unitsInside;
   double generationRate;
@@ -70,29 +80,27 @@ class Building extends SpriteComponent with TapCallbacks {
   Building({
     required this.type,
     required this.tier,
-    required this.faction,
+    required String faction,
     required super.position,
     required super.size,
     this.unitsInside = 0,
     this.generationRate = 1.0,
     this.maxCapacity = 50,
     super.anchor = Anchor.center,
-  });
+  })  : faction = faction,
+        tintPaint = FactionManager().getPaint(faction);
 
   @override
   Future<void> onLoad() async {
     await super.onLoad();
 
-    tintPaint = FactionManager().getPaint(faction);
-
-    baseSprite = await _tryLoadSprite(
+    final assets = AssetManager();
+    baseSprite = await assets.tryLoadSprite(
       AssetPaths.getBuildingBasePath(type, tier),
     );
-    detailSprite = await _tryLoadSprite(
+    detailSprite = await assets.tryLoadSprite(
       AssetPaths.getBuildingDetailPath(type, tier),
     );
-
-    _applySpriteState();
   }
 
   @override
@@ -117,10 +125,10 @@ class Building extends SpriteComponent with TapCallbacks {
 
   @override
   void render(ui.Canvas canvas) {
-    if (baseSprite != null) {
-      // Production path: SpriteComponent renders `sprite` through `paint`,
-      // which carries the faction ColorFilter.
-      super.render(canvas);
+    final base = baseSprite;
+    if (base != null) {
+      // Production path: the grayscale sprite through the faction ColorFilter.
+      base.render(canvas, size: size, overridePaint: tintPaint);
     } else {
       _renderPlaceholder(canvas);
     }
@@ -151,32 +159,12 @@ class Building extends SpriteComponent with TapCallbacks {
   void changeFaction(String newFaction) {
     faction = newFaction;
     tintPaint = FactionManager().getPaint(faction);
-    _applySpriteState();
   }
 
   /// Defence value = units inside × the building's defence multiplier
   /// (balance §1.3). The MVP has no capture, so the multiplier is a flat 1.0x
   /// Barracks value; per-type multipliers arrive with Milestone 2.
   double get defenseValue => unitsInside * 1.0;
-
-  void _applySpriteState() {
-    sprite = baseSprite;
-    paint = tintPaint;
-  }
-
-  Future<Sprite?> _tryLoadSprite(String path) async {
-    try {
-      return await Sprite.load(path);
-    } catch (_) {
-      // Deliberately catches Object, not Exception: a missing asset surfaces as
-      // a FlutterError, which extends Error. Catching only Exception lets it
-      // escape onLoad, and the component never mounts — a blank screen.
-      //
-      // A missing sprite is the expected state until the art is produced; the
-      // placeholder shape covers it. See orchestrator/REQUIRED_PNGS.md.
-      return null;
-    }
-  }
 
   /// Draws a stand-in for `<type>_tier<N>_base.png`.
   ///
@@ -194,12 +182,7 @@ class Building extends SpriteComponent with TapCallbacks {
     switch (type) {
       case 'tower':
         // Defensive tower: narrow and tall.
-        final tall = ui.Rect.fromLTWH(
-          size.x * 0.22,
-          0,
-          size.x * 0.56,
-          size.y,
-        );
+        final tall = ui.Rect.fromLTWH(size.x * 0.22, 0, size.x * 0.56, size.y);
         canvas.drawRRect(ui.RRect.fromRectAndRadius(tall, radius), body);
         canvas.drawRect(
           ui.Rect.fromLTWH(size.x * 0.22, 0, size.x * 0.56, size.y * 0.2),
@@ -207,12 +190,7 @@ class Building extends SpriteComponent with TapCallbacks {
         );
       case 'factory':
         // Heavy spawner: wide and squat.
-        final wide = ui.Rect.fromLTWH(
-          0,
-          size.y * 0.22,
-          size.x,
-          size.y * 0.56,
-        );
+        final wide = ui.Rect.fromLTWH(0, size.y * 0.22, size.x, size.y * 0.56);
         canvas.drawRRect(ui.RRect.fromRectAndRadius(wide, radius), body);
         canvas.drawRect(
           ui.Rect.fromLTWH(0, size.y * 0.22, size.x, size.y * 0.14),

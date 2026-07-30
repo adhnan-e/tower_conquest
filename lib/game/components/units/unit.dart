@@ -4,6 +4,7 @@ import 'package:flame/components.dart';
 
 import '../../constants/asset_paths.dart';
 import '../../constants/colors.dart';
+import '../../managers/asset_manager.dart';
 
 /// A soldier travelling from a source node to a target node.
 ///
@@ -11,10 +12,12 @@ import '../../constants/colors.dart';
 /// `planning/02_systems/01_GAMEPLAY_SYSTEMS_BALANCE.md` §2.1
 /// (100 px/s, combat power 1.0).
 ///
-/// Like [Building], it renders its grayscale sprite through the faction tint
-/// when the art exists and a placeholder shape through the same faction paint
-/// until then.
-class Unit extends SpriteComponent {
+/// Like [Building] this extends [PositionComponent] rather than
+/// `SpriteComponent`, because the latter asserts `sprite != null` on mount and
+/// the art has not been produced yet. It renders its grayscale sprite through
+/// the faction tint when one exists, and a placeholder shape through the same
+/// faction paint until then.
+class Unit extends PositionComponent {
   /// Unit class: `infantry`, `heavy_soldier`, `scout`.
   final String type;
 
@@ -30,7 +33,7 @@ class Unit extends SpriteComponent {
   Sprite? detailSprite;
 
   /// Shared, cached tint paint. Treated as read-only — see [FactionManager].
-  late ui.Paint tintPaint;
+  ui.Paint tintPaint;
 
   /// Where the unit is heading. Required — a unit with no destination has no
   /// meaning in this game.
@@ -43,30 +46,34 @@ class Unit extends SpriteComponent {
   /// capture arrive in Milestone 2) but carried so the value has one home.
   double combatPower;
 
+  /// Called once the unit reaches its destination, before it despawns. Lets the
+  /// game clear the unit from its route without the unit knowing about routes.
+  void Function(Unit unit)? onArrived;
+
   Unit({
     required this.type,
     required this.tier,
-    required this.faction,
+    required String faction,
     required super.position,
     required super.size,
     required this.targetPosition,
     this.speed = 100.0,
     this.combatPower = 1.0,
     super.anchor = Anchor.center,
-  });
+  })  : faction = faction,
+        tintPaint = FactionManager().getPaint(faction);
 
   @override
   Future<void> onLoad() async {
     await super.onLoad();
 
-    tintPaint = FactionManager().getPaint(faction);
-
-    baseSprite = await _tryLoadSprite(AssetPaths.getUnitBasePath(type, tier));
-    detailSprite = await _tryLoadSprite(
+    final assets = AssetManager();
+    baseSprite = await assets.tryLoadSprite(
+      AssetPaths.getUnitBasePath(type, tier),
+    );
+    detailSprite = await assets.tryLoadSprite(
       AssetPaths.getUnitDetailPath(type, tier),
     );
-
-    _applySpriteState();
   }
 
   @override
@@ -91,8 +98,9 @@ class Unit extends SpriteComponent {
 
   @override
   void render(ui.Canvas canvas) {
-    if (baseSprite != null) {
-      super.render(canvas);
+    final base = baseSprite;
+    if (base != null) {
+      base.render(canvas, size: size, overridePaint: tintPaint);
     } else {
       _renderPlaceholder(canvas);
     }
@@ -105,6 +113,7 @@ class Unit extends SpriteComponent {
   /// The MVP simply despawns; Milestone 2 replaces this with damage against the
   /// target node and the capture check.
   void onReachedTarget() {
+    onArrived?.call(this);
     removeFromParent();
   }
 
@@ -115,23 +124,6 @@ class Unit extends SpriteComponent {
   void changeFaction(String newFaction) {
     faction = newFaction;
     tintPaint = FactionManager().getPaint(faction);
-    _applySpriteState();
-  }
-
-  void _applySpriteState() {
-    sprite = baseSprite;
-    paint = tintPaint;
-  }
-
-  Future<Sprite?> _tryLoadSprite(String path) async {
-    try {
-      return await Sprite.load(path);
-    } catch (_) {
-      // Catches Object rather than Exception on purpose — see the note on
-      // Building._tryLoadSprite. A missing asset is a FlutterError (an Error),
-      // and letting it escape onLoad leaves the component unmounted.
-      return null;
-    }
   }
 
   /// Draws a stand-in for `<type>_tier<N>_base.png`: a white disc with a

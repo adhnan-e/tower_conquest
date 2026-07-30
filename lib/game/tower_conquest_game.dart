@@ -4,9 +4,11 @@ import 'package:flame/components.dart';
 import 'package:flame/game.dart';
 
 import 'components/buildings/building.dart';
+import 'components/map/path_link.dart';
 import 'components/units/unit.dart';
 
-/// The MVP game: one player node, one enemy node, tap-to-send.
+/// The MVP game: one player node, one enemy node, a visible route between them,
+/// and tap-to-send.
 ///
 /// Scope is deliberately the Milestone 1 slice from
 /// `planning/04_implementation/02_DEVELOPMENT_PROMPT.md` — generation, unit
@@ -23,6 +25,10 @@ class TowerConquestGame extends FlameGame {
 
   late final Building playerBase;
   late final Building enemyBase;
+
+  /// Every route on the map. In Milestone 2 this is built from the level's
+  /// `paths` array (`05_levels/01_LEVEL_DESIGN.md` §5) rather than hard-coded.
+  final List<PathLink> paths = [];
 
   /// The node currently selected as the source of a send, if any.
   Building? selectedBuilding;
@@ -57,7 +63,9 @@ class TowerConquestGame extends FlameGame {
       unitsInside: 10,
     )..onTapped = _onBuildingTapped;
 
-    await world.addAll([playerBase, enemyBase]);
+    paths.add(PathLink(a: playerBase, b: enemyBase));
+
+    await world.addAll([...paths, playerBase, enemyBase]);
   }
 
   /// Tap the player node to select it, then tap the enemy node to send a unit.
@@ -97,13 +105,34 @@ class TowerConquestGame extends FlameGame {
       targetPosition: to.position.clone(),
     );
 
+    // Light up the route for as long as this unit is on it.
+    final route = linkBetween(from, to);
+    if (route != null) {
+      route.beginFlow(from);
+      unit.onArrived = (_) => route.endFlow(from);
+    }
+
     world.add(unit);
     return unit;
+  }
+
+  /// The route joining [from] and [to], or null if the two are not connected.
+  PathLink? linkBetween(Building from, Building to) {
+    for (final path in paths) {
+      if (path.connects(from, to)) return path;
+    }
+    return null;
   }
 
   void _select(Building? building) {
     selectedBuilding?.isSelected = false;
     selectedBuilding = building;
     building?.isSelected = true;
+
+    // Highlight every route leading out of the selected node, so the player can
+    // see where units can actually be sent.
+    for (final path in paths) {
+      path.isHighlighted = building != null && path.touches(building);
+    }
   }
 }

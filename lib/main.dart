@@ -1,9 +1,18 @@
+import 'package:flame/flame.dart';
 import 'package:flame/game.dart';
 import 'package:flutter/material.dart';
 
 import 'game/tower_conquest_game.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Tower Conquest targets phones (GDD §1) and every level is laid out
+  // vertically, so lock the orientation and reclaim the system bars. Both calls
+  // are no-ops on platforms that do not support them.
+  await Flame.device.fullScreen();
+  await Flame.device.setPortrait();
+
   runApp(const TowerConquestApp());
 }
 

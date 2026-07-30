@@ -128,6 +128,8 @@ handoff** and should not be produced until the matching code lands:
   and the types are unused by the MVP level.
 - `heavy_soldier`, `scout` — unit classes are Milestone 2.
 - Terrain, effects, UI, progression and cosmetic assets.
+- Anything for the routes between nodes — `PathLink` draws them procedurally as
+  faction-coloured bands and needs no art.
 
 When Milestone 2 begins, this document will be superseded by a second request
 covering the four building types × the tiers actually implemented.
