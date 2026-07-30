@@ -1,135 +1,36 @@
-# Required PNGs — Milestone 1 (MVP)
+# Phase 1: MVP Assets (14 files)
 
-Asset request from the developer side to the orchestrator. These are the **four**
-sprites the current MVP build needs, matching the "4 grayscale sprites (1
-building base/detail, 1 unit base/detail)" line item for Milestone 1 in
-`planning/01_design/01_GAME_DESIGN_DOCUMENT.md` §11.
+This manifest lists the exact PNG files required for the Tower Conquest MVP. All files must be placed in `assets/images/buildings/` and `assets/images/units/`.
 
-The game **already runs without them.** Every entity currently draws a
-procedural placeholder shape through the exact same faction `Paint` the sprites
-will use, so nothing about the colour pipeline changes when the art lands — see
-[Drop-in procedure](#drop-in-procedure).
+## Format Requirements
+- **Size:** Buildings 256×256 px; Units 64×64 px
+- **Transparency:** PNG-32 RGBA, alpha 0 outside silhouette (no white background)
+- **Style:** Top-down orthographic, minimalist geometric, flat shading, soft rounded edges
+- **Base Layers (`*_base.png`):** Pure grayscale, biased bright (#FFFFFF main body, #B0B0B0 soft panels, #888888 shaded faces). No hue.
+- **Detail Layers (`*_detail.png`):** Untinted fixed colors. Mid-tone colors (golds, dark charcoals, off-whites) that read clearly against both #2D8CFF (blue) and #E74C3C (red). No faction emblems.
 
----
+## 1. Buildings (8 files)
+Directory: `assets/images/buildings/`
 
-## 1. The four files
+| Filename | Purpose | Description |
+| :--- | :--- | :--- |
+| `barracks_tier1_base.png` | Standard spawner body | Rounded square, bright grayscale |
+| `barracks_tier1_detail.png` | Standard spawner details | Dark charcoal doorway, gold crossed-swords insignia |
+| `tower_tier1_base.png` | Defensive structure body | Tall narrow square/circle, bright grayscale |
+| `tower_tier1_detail.png` | Defensive structure details | Dark charcoal windows, gold shield insignia |
+| `factory_tier1_base.png` | Heavy spawner body | Wide squat rectangle, bright grayscale |
+| `factory_tier1_detail.png` | Heavy spawner details | Dark charcoal wide garage door, gold gear insignia |
+| `command_center_tier1_base.png` | Primary hub body | Large rounded square with core block, bright grayscale |
+| `command_center_tier1_detail.png` | Primary hub details | Dark charcoal main entrance, gold star insignia, glowing core |
 
-| # | Filename | Destination | Layer | Size | Replaces placeholder |
-| :- | :-- | :-- | :-- | :-- | :-- |
-| 1 | `barracks_tier1_base.png` | `assets/images/buildings/` | Base (tintable) | 96 × 96 | Rounded square, white body |
-| 2 | `barracks_tier1_detail.png` | `assets/images/buildings/` | Detail (never tinted) | 96 × 96 | Mid-gray roof band |
-| 3 | `infantry_tier1_base.png` | `assets/images/units/` | Base (tintable) | 20 × 20 | White disc |
-| 4 | `infantry_tier1_detail.png` | `assets/images/units/` | Detail (never tinted) | 20 × 20 | Mid-gray core dot |
+## 2. Units (6 files)
+Directory: `assets/images/units/`
 
-Filenames follow the catalog convention in
-`planning/03_assets/01_ASSET_CATALOG_PRODUCTION.md` §1.1 —
-`<type>_tier<N>_base.png` and `<type>_tier<N>_detail.png`. The code builds these
-paths in `lib/game/constants/asset_paths.dart`; **the names must match exactly**,
-lower-case, no spaces.
-
-Detail layers are optional. If a detail PNG is not supplied the base still
-renders correctly on its own.
-
-### Sizing note
-
-The dimensions above are the on-screen logical sizes used by
-`lib/game/tower_conquest_game.dart`. Supplying them at **2× or 3×**
-(192 × 192 and 40 × 40, or 288 × 288 and 60 × 60) is preferred — Flame scales
-sprites down to the component size, so higher-resolution source art looks
-correct on high-DPI phones. Keep them square.
-
----
-
-## 2. Grayscale specification for base layers
-
-This is the part that matters most. Base layers are tinted at runtime with:
-
-```dart
-ColorFilter.mode(factionColour, BlendMode.multiply)
-```
-
-Multiply means **the output is the source pixel multiplied by the faction
-colour**. Consequences the art must respect:
-
-| Source gray | Result when tinted `#2D8CFF` (player blue) | Use for |
-| :-- | :-- | :-- |
-| `#FFFFFF` white | full, saturated faction blue | main body / the colour the faction should read as |
-| `#B0B0B0` light gray | slightly muted blue | soft shading, subtle panels |
-| `#888888` mid gray | half-strength blue, clearly darker | shadowed faces, recessed bands |
-| `#404040` dark gray | very dark blue, nearly black | deep shadow, outlines |
-| `#000000` black | **black regardless of faction** | avoid unless a hard black outline is intended |
-
-Rules:
-
-1. **Paint the body pure white.** Anything less permanently desaturates the
-   faction colour. If the building reads as gray in-game, the base was drawn too
-   dark.
-2. **Use gray only for shading**, and stay above `#404040` for anything that
-   should still read as coloured.
-3. **No colour at all** in a base layer — it multiplies into muddy hues. Colour
-   belongs in the detail layer.
-4. **Transparent background.** 32-bit RGBA PNG, alpha `0` outside the silhouette.
-   Do not ship a white background — it would tint into a full faction-colour
-   square.
-5. **Anti-aliased edges are fine**; partial alpha tints correctly.
-
-Quick self-check: open the base PNG, desaturate-check it — if the brightest
-pixel of the main body is not near-white, it needs lightening.
-
-## 3. Specification for detail layers
-
-Detail layers are rendered on top **without any filter**, so they appear exactly
-as authored. They carry the fixed visual identity that survives every faction
-recolour — doorways, emblems, insignia, glass, glow.
-
-- Full colour, authored as final.
-- Transparent everywhere the base should show through — this layer is mostly
-  empty.
-- Same pixel dimensions as its base layer, same alignment, so the two stack with
-  no offset.
-- Must read against **both** blue `#2D8CFF` and red `#E74C3C` backing. Mid-tone
-  golds, dark charcoals and off-whites work; saturated blues and reds do not.
-
-Per the catalog's own example: `barracks_tier1_detail.png` = dark gray doorway
-plus a golden shield emblem.
-
----
-
-## 4. Drop-in procedure
-
-1. Copy the files into `assets/images/buildings/` and `assets/images/units/`.
-2. Run `flutter pub get`.
-3. Run the app.
-
-That is the whole procedure. **No code change and no `pubspec.yaml` change is
-required** — both directories are already declared in `pubspec.yaml`, and
-`Building`/`Unit` attempt `Sprite.load` on every start, falling back to the
-placeholder shape only when the file is absent. The moment a PNG exists it takes
-over.
-
-### Verifying the handoff
-
-- [ ] Player barracks renders blue `#2D8CFF`, enemy barracks red `#E74C3C`, from the *same* PNG.
-- [ ] Neither building looks washed-out or gray — if it does, the base layer is too dark (§2 rule 1).
-- [ ] The detail layer's colours are identical on the blue and the red building.
-- [ ] No opaque rectangle behind either sprite — that means a non-transparent background (§2 rule 4).
-- [ ] The unit counter is still legible over the building body.
-- [ ] `flutter test` still passes.
-
----
-
-## 5. Not needed yet
-
-The catalog lists 200+ assets. Everything below is **out of scope for this
-handoff** and should not be produced until the matching code lands:
-
-- Tiers 2-5 of any building — the upgrade system is Milestone 2.
-- `tower`, `factory`, `command_center` — placeholder silhouettes exist in code
-  and the types are unused by the MVP level.
-- `heavy_soldier`, `scout` — unit classes are Milestone 2.
-- Terrain, effects, UI, progression and cosmetic assets.
-- Anything for the routes between nodes — `PathLink` draws them procedurally as
-  faction-coloured bands and needs no art.
-
-When Milestone 2 begins, this document will be superseded by a second request
-covering the four building types × the tiers actually implemented.
+| Filename | Purpose | Description |
+| :--- | :--- | :--- |
+| `infantry_tier1_base.png` | Standard unit body | Small circle/helmet, bright grayscale |
+| `infantry_tier1_detail.png` | Standard unit details | Dark charcoal visor, subtle highlight |
+| `heavy_soldier_tier1_base.png` | Armored unit body | Larger rounded square/armor, bright grayscale |
+| `heavy_soldier_tier1_detail.png` | Armored unit details | Dark charcoal heavy visor, gold chevron |
+| `scout_tier1_base.png` | Fast unit body | Small triangle/sleek shape, bright grayscale |
+| `scout_tier1_detail.png` | Fast unit details | Dark charcoal narrow visor, sleek highlight |
