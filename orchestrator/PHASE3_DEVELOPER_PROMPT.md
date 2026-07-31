@@ -1,42 +1,64 @@
-# Phase 3 Developer Prompt: Level Design & Campaign Structure
+# Phase 3 Developer Prompt — Stage 1: Level Definition and Loading
 
-**Milestone:** Phase 3 – Level Design & Campaign Progression  
-**Duration:** 4–8 weeks  
-**Scope:** 30+ playable levels organized into 4 campaigns with progressive difficulty, meta-progression system, and level editor infrastructure.
-
----
-
-## Overview
-
-Phase 3 transforms Tower Conquest from a single-match game into a full campaign experience. This phase introduces:
-
-1. **Level Definition System** – A declarative format for defining map layouts, node positions, building types, obstacles, and difficulty parameters.
-2. **Campaign Structure** – Four campaigns (30+ levels) with increasing complexity and difficulty.
-3. **Meta-Progression** – Persistent currency (Gold), research trees, and permanent upgrades earned across levels.
-4. **Level Editor Infrastructure** – Tools for orchestrator to design and validate levels without modifying code.
-5. **Difficulty Scaling** – AI difficulty, unit generation rates, and map complexity scale with campaign progression.
+**Project:** Tower Conquest
+**Milestone:** Phase 3 — Level Design and Campaign Structure
+**Implementation increment:** Stage 1 only
+**Authoritative baseline:** `main` after commit `739297f`
+**Scope owner:** Developer implements code. Orchestrator owns design, level content, asset planning, and review.
 
 ---
 
-## Phase 2 Recap: Current State
+## 1. Purpose and Scope
 
-Before starting Phase 3, understand what Phase 2 delivered:
+Stage 1 replaces the current hard-coded two-node map with a **data-driven level-loading foundation**. It must support declarative map metadata, node placement, ownership, starting garrisons, and explicit links between nodes. It must also preserve the current playable two-node match as the default loaded level.
 
-- **Building Upgrade System:** Tier 1–5 progression with cost/bonus tables.
-- **Tier-Aware Sprites:** 32 PNG assets (Tier 2–5 variants) with automatic fallback.
-- **Tactical AI:** NormalAIStrategy with target selection, unit allocation, and threat assessment.
-- **Building Info Panel:** In-match UI for tier display, garrison count, and upgrades.
-- **Test Coverage:** 220 passing tests, all quality gates clean.
+This is deliberately a foundation increment. It does **not** implement the full 30-level campaign, campaign-selection UI, persistent currency, research UI, obstacle collisions, hazards, new artwork, or difficulty-specific AI behavior. Those features depend on a trusted level schema and will be specified in later Phase 3 stages.
 
-**Current Limitation:** The game runs on a single hard-coded 2-node map (Player Command Center vs. Enemy Command Center). Phase 3 removes this limitation.
+> **Source-of-truth rule:** Existing Dart APIs and passing tests take precedence over older pseudocode. Do not copy earlier constructor examples verbatim if they conflict with the codebase.
 
 ---
 
-## System 1: Level Definition & Loading
+## 2. Verified Current Architecture
 
-### 1.1 Level Data Format
+The following statements have been checked against current `main` and are constraints for this work.
 
-Levels are defined in a declarative JSON format stored in `assets/levels/` directory. Each level file follows this structure:
+| Area | Current architecture | Stage 1 implication |
+|---|---|---|
+| Building type | `String` values such as `barracks`, `tower`, `factory`, and `command_center` | Keep strings; do **not** introduce a `BuildingType` enum. |
+| Faction | `String` values such as `player`, `enemy`, and `neutral` | Keep strings; do **not** introduce a `Faction` enum. |
+| Building identity | `Building` has no `id` constructor parameter or `id` field | Keep authored node IDs in `NodeData`; use a loader-local `Map<String, Building>` when resolving links. |
+| Building size | Inherited `PositionComponent.size` is a required `Vector2` constructor argument | Supply the existing game node size or a level-defined `Vector2`; do not use a `double`. |
+| Building stats | `unitsInside`, `generationRate`, `maxCapacity`, and `defenseMultiplier` are optional constructor parameters with Barracks-like defaults | Override the three balance-dependent stats for **every** node type using the existing public balance lookup. |
+| Balance lookup | `BuildingBalance.baseStatsFor(String type)` is already public | Call it directly; do not change its visibility. |
+| AI harness | `EnemyCommander({this.faction = 'enemy', AIStrategy? strategy}) : strategy = strategy ?? NormalAIStrategy();` | Keep this contract. Stage 1 must not add `difficulty` or `targetNodes` parameters. |
+| Normal AI | `NormalAIStrategy` presently has no configurable constructor | Do not imply an existing aggressiveness knob. Difficulty behavior is deferred to a later stage. |
+| Starting tiers | `Building.upgrade()` spends garrison units and recalculates from stored Tier 1 base values | Stage 1 authored nodes must use `tier: 1`. Do not simulate paid upgrades while loading a level. |
+
+The current quality baseline is **204 visible test cases plus 16 hidden suite-loading events, for 220 successful test events**. Do not describe this as 220 visible test cases.
+
+---
+
+## 3. Stage 1 Deliverables
+
+The Stage 1 pull request must contain the following deliverables.
+
+| Deliverable | Requirement |
+|---|---|
+| Typed level data model | A Dart model for level metadata, nodes, links, rewards, and the parsing/validation result. |
+| Level asset structure | A stable location under `assets/levels/`, registered in `pubspec.yaml` using directory inclusion. |
+| Level loader | An asynchronous loader that reads a named JSON level asset, parses it, validates it, and caches immutable `LevelData`. |
+| Runtime factory | A narrow adapter that converts valid `NodeData` into correctly configured `Building` instances and resolves authored link IDs into `PathLink` instances. |
+| Default playable level | A JSON version of the current two-node Barracks match, used by default after the integration. |
+| Defensive fallback | A separately testable fallback level for unreadable/missing requested content. Schema errors must remain observable rather than silently being treated as valid content. |
+| Tests | Focused unit/integration tests for parsing, validation, balance wiring, link resolution, fallback behavior, and preservation of the baseline match. |
+
+No new asset generation is part of this Stage 1 request.
+
+---
+
+## 4. Canonical Level Schema for Stage 1
+
+Store level JSON under `assets/levels/`. The first canonical sample should be `assets/levels/campaign_1_level_1.json` and should recreate the current 1v1 Barracks map.
 
 ```json
 {
@@ -44,718 +66,190 @@ Levels are defined in a declarative JSON format stored in `assets/levels/` direc
   "name": "First Contact",
   "campaign": 1,
   "levelNumber": 1,
-  "description": "Capture the enemy's command center in this simple 1v1 matchup.",
-  "difficulty": "easy",
+  "description": "Capture the opposing command position in a simple two-node match.",
+  "difficulty": "normal",
   "width": 800,
   "height": 600,
   "nodes": [
     {
-      "id": "player_cc",
-      "type": "command_center",
+      "id": "player_base",
+      "type": "barracks",
       "faction": "player",
-      "position": { "x": 100, "y": 300 },
-      "tier": 1
+      "position": { "x": 0, "y": 220 },
+      "tier": 1,
+      "unitsInside": 10
     },
     {
-      "id": "enemy_cc",
-      "type": "command_center",
+      "id": "enemy_base",
+      "type": "barracks",
       "faction": "enemy",
-      "position": { "x": 700, "y": 300 },
-      "tier": 1
+      "position": { "x": 0, "y": -220 },
+      "tier": 1,
+      "unitsInside": 10
     }
   ],
-  "obstacles": [],
-  "hazards": [],
+  "links": [
+    { "from": "player_base", "to": "enemy_base" }
+  ],
   "winCondition": "capture_all_enemy_nodes",
-  "timeLimit": null,
-  "rewards": {
-    "gold": 100,
-    "gems": 0,
-    "experience": 50
-  }
+  "timeLimitSeconds": null,
+  "rewards": { "gold": 0, "gems": 0, "experience": 0 }
 }
 ```
 
-### 1.2 Level Loader Implementation
+### 4.1 Supported Stage 1 Fields
 
-Create a `LevelManager` class that:
+| Field | Type | Validation rule |
+|---|---|---|
+| `id` | non-empty string | Must be unique within the level catalog. |
+| `name` | non-empty string | Required. |
+| `campaign` | positive integer | Required; supports later campaign organization. |
+| `levelNumber` | positive integer | Required; unique within a campaign. |
+| `description` | string | Required; may be empty only if product direction later permits it. |
+| `difficulty` | `easy`, `normal`, or `hard` | Parse and validate as metadata only in Stage 1. |
+| `width`, `height` | positive number | Must define a positive canvas. |
+| `nodes` | non-empty list | Must contain at least one player node and one enemy node. |
+| `nodes[].id` | non-empty string | Unique within the level; stays in data, not on `Building`. |
+| `nodes[].type` | string | One of `barracks`, `tower`, `factory`, `command_center`. |
+| `nodes[].faction` | string | One of `player`, `enemy`, `neutral`. |
+| `nodes[].position` | `{x, y}` number pair | Must lie inside declared map bounds. |
+| `nodes[].tier` | integer | Must be `1` in Stage 1. |
+| `nodes[].unitsInside` | non-negative integer | Must not exceed the node type's Tier 1 capacity. |
+| `links` | list | Each end must reference a declared node; no self-links or duplicate unordered pairs. |
+| `winCondition` | string | Stage 1 supports `capture_all_enemy_nodes`. Reject or clearly mark other values unsupported. |
+| `timeLimitSeconds` | positive integer or null | Parse and validate only; no countdown implementation in Stage 1. |
+| `rewards` | object | Parse as immutable data; do not add persistence in Stage 1. |
 
-- Loads level JSON files from `assets/levels/`
-- Parses node definitions and instantiates Building components
-- Validates level integrity (no duplicate node IDs, valid factions, etc.)
-- Caches loaded levels in memory
-- Provides fallback to a default 2-node map if a level fails to load
+`obstacles`, `hazards`, dynamic node sizes, higher starting tiers, and runtime map modifiers are intentionally out of scope. Add them only through a subsequent reviewed schema revision.
+
+---
+
+## 5. Data Model Requirements
+
+Use typed, immutable data objects. Exact class filenames and directory names may follow existing project conventions, but the model must preserve all supported JSON fields and allow deterministic validation.
+
+`NodeData.type` and `NodeData.faction` must be `String`, not invented enums. Keep `NodeData.id` so that authored links can be validated and resolved. `LinkData` should retain `from` and `to` node IDs as strings. `LevelData` should expose immutable node and link collections after validation.
+
+Validation should occur before game-world mutation. A malformed selected level must produce a meaningful `FormatException` or domain-specific validation error that identifies the affected field. A separate `loadOrFallback` path may substitute the known-safe two-node level for unreadable or missing content, but it must not hide authoring errors during test or development workflows.
+
+---
+
+## 6. Authoritative Runtime Construction Pattern
+
+The actual `Building` constructor has this relevant shape:
 
 ```dart
-class LevelManager {
-  static final LevelManager _instance = LevelManager._internal();
-  
-  factory LevelManager() => _instance;
-  LevelManager._internal();
-  
-  final Map<String, LevelData> _levelCache = {};
-  
-  Future<LevelData> loadLevel(String levelId) async {
-    if (_levelCache.containsKey(levelId)) {
-      return _levelCache[levelId]!;
-    }
-    
-    final jsonString = await Flame.bundle.loadString('assets/levels/$levelId.json');
-    final json = jsonDecode(jsonString) as Map<String, dynamic>;
-    final level = LevelData.fromJson(json);
-    
-    _validateLevel(level);
-    _levelCache[levelId] = level;
-    return level;
-  }
-  
-  void _validateLevel(LevelData level) {
-    // Validate node IDs are unique
-    final nodeIds = level.nodes.map((n) => n.id).toSet();
-    if (nodeIds.length != level.nodes.length) {
-      throw Exception('Duplicate node IDs in level ${level.id}');
-    }
-    
-    // Validate at least one player and one enemy node
-    final playerNodes = level.nodes.where((n) => n.faction == Faction.player).length;
-    final enemyNodes = level.nodes.where((n) => n.faction == Faction.enemy).length;
-    if (playerNodes == 0 || enemyNodes == 0) {
-      throw Exception('Level must have at least one player and one enemy node');
-    }
-  }
-  
-  LevelData getDefaultLevel() {
-    // Return a 2-node fallback map
-    return LevelData(
-      id: 'default',
-      name: 'Default Match',
-      campaign: 0,
-      levelNumber: 0,
-      description: 'A simple 1v1 match',
-      difficulty: 'normal',
-      width: 800,
-      height: 600,
-      nodes: [
-        NodeData(id: 'player_cc', type: BuildingType.commandCenter, faction: Faction.player, position: Vector2(100, 300), tier: 1),
-        NodeData(id: 'enemy_cc', type: BuildingType.commandCenter, faction: Faction.enemy, position: Vector2(700, 300), tier: 1),
-      ],
-      obstacles: [],
-      hazards: [],
-      winCondition: 'capture_all_enemy_nodes',
-      timeLimit: null,
-      rewards: LevelRewards(gold: 0, gems: 0, experience: 0),
-    );
-  }
-}
+Building({
+  required this.type,
+  required this.tier,
+  required String faction,
+  required super.position,
+  required super.size,
+  this.unitsInside = 0,
+  this.generationRate = 1.0,
+  this.maxCapacity = 50,
+  this.defenseMultiplier = 1.0,
+  super.anchor = Anchor.center,
+})
 ```
 
-### 1.3 Level Data Classes
+There is no `id` argument. `size` is a `Vector2`. The defaults represent Barracks-like Tier 1 values, so using defaults for every type would silently misconfigure Towers, Factories, and Command Centers.
 
-Define the following data classes in `lib/game/models/level_data.dart`:
+The runtime factory must therefore follow this sequence for every authored node:
+
+1. Retrieve `final stats = BuildingBalance.baseStatsFor(node.type)`.
+2. Reject the node if `stats` is `null`; schema validation should normally prevent this.
+3. Build a `Building` with `tier: 1`, the authored faction and position, the existing game node `Vector2` size, authored `unitsInside`, and these exact balance values:
+   - `generationRate: stats.genRate`
+   - `maxCapacity: stats.capacity`
+   - `defenseMultiplier: stats.defense`
+4. Preserve the authored node ID in a loader-local map, for example `Map<String, Building> buildingsByNodeId`, solely to resolve `LinkData` into `PathLink` instances.
+5. Apply the existing tap callback exactly as the current hard-coded `_buildLevel()` does.
+
+Do not change `Building` simply to add an ID. Do not make the optional constructor fields required. Do not call `upgrade()` while loading, because that charges the garrison and represents in-match progression rather than authored initial state.
+
+---
+
+## 7. Game Integration Rules
+
+Replace the hard-coded map construction only after the loader and runtime factory are independently tested. The integrated default path must load the JSON equivalent of the current Barracks-vs-Barracks match and preserve current selection, unit sending, pathing, capture, and match-outcome behavior.
+
+`TowerConquestGame` may retain compatibility fields such as `playerBase` and `enemyBase` while the game remains dependent on them, but the authoritative collection of map nodes must continue to be the existing `nodes` list. The developer may use the node-ID map only during initialization; it must not become a second mutable world model.
+
+Stage 1 must continue to create the AI using the existing constructor contract:
 
 ```dart
-class LevelData {
-  final String id;
-  final String name;
-  final int campaign;
-  final int levelNumber;
-  final String description;
-  final String difficulty; // 'easy', 'normal', 'hard'
-  final double width;
-  final double height;
-  final List<NodeData> nodes;
-  final List<ObstacleData> obstacles;
-  final List<HazardData> hazards;
-  final String winCondition;
-  final int? timeLimit; // in seconds, null if no limit
-  final LevelRewards rewards;
-  
-  LevelData({
-    required this.id,
-    required this.name,
-    required this.campaign,
-    required this.levelNumber,
-    required this.description,
-    required this.difficulty,
-    required this.width,
-    required this.height,
-    required this.nodes,
-    required this.obstacles,
-    required this.hazards,
-    required this.winCondition,
-    required this.timeLimit,
-    required this.rewards,
-  });
-  
-  factory LevelData.fromJson(Map<String, dynamic> json) {
-    return LevelData(
-      id: json['id'] as String,
-      name: json['name'] as String,
-      campaign: json['campaign'] as int,
-      levelNumber: json['levelNumber'] as int,
-      description: json['description'] as String,
-      difficulty: json['difficulty'] as String,
-      width: (json['width'] as num).toDouble(),
-      height: (json['height'] as num).toDouble(),
-      nodes: (json['nodes'] as List).map((n) => NodeData.fromJson(n as Map<String, dynamic>)).toList(),
-      obstacles: (json['obstacles'] as List?)?.map((o) => ObstacleData.fromJson(o as Map<String, dynamic>)).toList() ?? [],
-      hazards: (json['hazards'] as List?)?.map((h) => HazardData.fromJson(h as Map<String, dynamic>)).toList() ?? [],
-      winCondition: json['winCondition'] as String,
-      timeLimit: json['timeLimit'] as int?,
-      rewards: LevelRewards.fromJson(json['rewards'] as Map<String, dynamic>),
-    );
-  }
-}
-
-class NodeData {
-  final String id;
-  final BuildingType type;
-  final Faction faction;
-  final Vector2 position;
-  final int tier;
-  
-  NodeData({
-    required this.id,
-    required this.type,
-    required this.faction,
-    required this.position,
-    required this.tier,
-  });
-  
-  factory NodeData.fromJson(Map<String, dynamic> json) {
-    return NodeData(
-      id: json['id'] as String,
-      type: BuildingType.values.byName(json['type'] as String),
-      faction: Faction.values.byName(json['faction'] as String),
-      position: Vector2((json['position']['x'] as num).toDouble(), (json['position']['y'] as num).toDouble()),
-      tier: json['tier'] as int? ?? 1,
-    );
-  }
-}
-
-class LevelRewards {
-  final int gold;
-  final int gems;
-  final int experience;
-  
-  LevelRewards({
-    required this.gold,
-    required this.gems,
-    required this.experience,
-  });
-  
-  factory LevelRewards.fromJson(Map<String, dynamic> json) {
-    return LevelRewards(
-      gold: json['gold'] as int? ?? 0,
-      gems: json['gems'] as int? ?? 0,
-      experience: json['experience'] as int? ?? 0,
-    );
-  }
-}
-
-// Placeholder classes for Phase 3 expansion
-class ObstacleData {
-  final String id;
-  final String type; // 'wall', 'rock', etc.
-  final Vector2 position;
-  final double width;
-  final double height;
-  
-  ObstacleData({
-    required this.id,
-    required this.type,
-    required this.position,
-    required this.width,
-    required this.height,
-  });
-  
-  factory ObstacleData.fromJson(Map<String, dynamic> json) {
-    return ObstacleData(
-      id: json['id'] as String,
-      type: json['type'] as String,
-      position: Vector2((json['position']['x'] as num).toDouble(), (json['position']['y'] as num).toDouble()),
-      width: (json['width'] as num).toDouble(),
-      height: (json['height'] as num).toDouble(),
-    );
-  }
-}
-
-class HazardData {
-  final String id;
-  final String type; // 'mine', 'spike', etc.
-  final Vector2 position;
-  final double radius;
-  final int damage;
-  
-  HazardData({
-    required this.id,
-    required this.type,
-    required this.position,
-    required this.radius,
-    required this.damage,
-  });
-  
-  factory HazardData.fromJson(Map<String, dynamic> json) {
-    return HazardData(
-      id: json['id'] as String,
-      type: json['type'] as String,
-      position: Vector2((json['position']['x'] as num).toDouble(), (json['position']['y'] as num).toDouble()),
-      radius: (json['radius'] as num).toDouble(),
-      damage: json['damage'] as int? ?? 0,
-    );
-  }
-}
+enemyCommander = EnemyCommander();
 ```
 
----
-
-## System 2: Campaign & Level Progression
-
-### 2.1 Campaign Structure
-
-Organize levels into four campaigns with increasing difficulty:
-
-| Campaign | Levels | Focus | Difficulty |
-| :--- | :--- | :--- | :--- |
-| **Campaign 1: Basics** | 1–5 | Tutorial, 1v1 matches, unit movement | Easy |
-| **Campaign 2: Multi-Node** | 6–15 | 2–3 node maps, neutral nodes, upgrades | Normal |
-| **Campaign 3: Advanced** | 16–25 | 4–5 node maps, obstacles, hazards | Hard |
-| **Campaign 4: Endgame** | 26–30 | Complex 6+ node maps, multiple threats | Very Hard |
-
-### 2.2 Campaign Manager
-
-Create a `CampaignManager` class that tracks player progress:
-
-```dart
-class CampaignManager {
-  static final CampaignManager _instance = CampaignManager._internal();
-  
-  factory CampaignManager() => _instance;
-  CampaignManager._internal();
-  
-  final List<CampaignData> campaigns = [];
-  int currentCampaign = 1;
-  int currentLevel = 1;
-  
-  Future<void> initialize() async {
-    // Load all level definitions
-    campaigns.add(CampaignData(
-      id: 1,
-      name: 'Basics',
-      description: 'Learn the fundamentals of Tower Conquest',
-      levels: ['campaign_1_level_1', 'campaign_1_level_2', 'campaign_1_level_3', 'campaign_1_level_4', 'campaign_1_level_5'],
-    ));
-    // ... load other campaigns
-  }
-  
-  Future<LevelData> getCurrentLevel() async {
-    final levelId = campaigns[currentCampaign - 1].levels[currentLevel - 1];
-    return LevelManager().loadLevel(levelId);
-  }
-  
-  void completeLevel(LevelRewards rewards) {
-    // Award gold, gems, experience
-    // Unlock next level
-    // Save progress to persistent storage
-  }
-}
-
-class CampaignData {
-  final int id;
-  final String name;
-  final String description;
-  final List<String> levels;
-  
-  CampaignData({
-    required this.id,
-    required this.name,
-    required this.description,
-    required this.levels,
-  });
-}
-```
+The parsed `difficulty` value is level metadata in this increment. It must not be passed as an invented `EnemyCommander` argument. No new `NormalAIStrategy(aggressiveness: ...)` call belongs in Stage 1 because that constructor does not yet exist.
 
 ---
 
-## System 3: Meta-Progression
+## 8. Deferred Decisions for Later Phase 3 Stages
 
-### 3.1 Player Progress Tracking
-
-Create a `PlayerProgress` class that persists across sessions:
-
-```dart
-class PlayerProgress {
-  int totalGold = 0;
-  int totalGems = 0;
-  int totalExperience = 0;
-  
-  int currentCampaign = 1;
-  int currentLevel = 1;
-  
-  Map<String, bool> completedLevels = {}; // levelId -> completed
-  Map<String, int> levelBestTime = {}; // levelId -> time in seconds
-  
-  // Research tree unlocks
-  Set<String> unlockedResearch = {};
-  
-  Future<void> save() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('totalGold', totalGold);
-    await prefs.setInt('totalGems', totalGems);
-    await prefs.setInt('totalExperience', totalExperience);
-    // ... save other fields
-  }
-  
-  Future<void> load() async {
-    final prefs = await SharedPreferences.getInstance();
-    totalGold = prefs.getInt('totalGold') ?? 0;
-    totalGems = prefs.getInt('totalGems') ?? 0;
-    totalExperience = prefs.getInt('totalExperience') ?? 0;
-    // ... load other fields
-  }
-}
-```
-
-### 3.2 Research Tree
-
-Define permanent upgrades that players can unlock with Gold:
-
-```dart
-class ResearchTree {
-  static final Map<String, ResearchNode> nodes = {
-    'logistics': ResearchNode(
-      id: 'logistics',
-      name: 'Logistics',
-      description: '+5% unit movement speed',
-      cost: 100,
-      effect: () => gameState.unitSpeedMultiplier *= 1.05,
-    ),
-    'fortification': ResearchNode(
-      id: 'fortification',
-      name: 'Fortification',
-      description: '+0.1x defense multiplier for all towers',
-      cost: 150,
-      effect: () => gameState.defenseMultiplier += 0.1,
-    ),
-    'recruitment': ResearchNode(
-      id: 'recruitment',
-      name: 'Recruitment',
-      description: '-5% building upgrade cost',
-      cost: 200,
-      effect: () => gameState.upgradeCostMultiplier *= 0.95,
-    ),
-  };
-  
-  static void unlockResearch(String researchId) {
-    final node = nodes[researchId];
-    if (node != null && node.cost <= playerProgress.totalGold) {
-      playerProgress.totalGold -= node.cost;
-      playerProgress.unlockedResearch.add(researchId);
-      node.effect();
-    }
-  }
-}
-
-class ResearchNode {
-  final String id;
-  final String name;
-  final String description;
-  final int cost;
-  final Function() effect;
-  
-  ResearchNode({
-    required this.id,
-    required this.name,
-    required this.description,
-    required this.cost,
-    required this.effect,
-  });
-}
-```
+| Deferred item | Reason for deferral | Future direction |
+|---|---|---|
+| Difficulty-specific AI | No configurable Normal AI constructor exists today. | Add explicit strategy classes or reviewed strategy parameters in a dedicated stage, then map `difficulty` through the existing `AIStrategy` injection seam. |
+| Higher authored starting tiers | Current `upgrade()` spends garrison units. | Design a non-spending, balance-safe initialization API before allowing `tier > 1` in level JSON. |
+| Campaign catalog and 30+ levels | Needs trusted schema and playtest loop. | Build content after Stage 1 is merged and level validation is stable. |
+| Meta-progression and research | Persistent effects must not mutate accumulators. | Store unlocked IDs and recompute modifiers from immutable base values. |
+| Obstacles, hazards, and terrain art | They require gameplay collision rules and confirmed level themes. | Scope after the level foundation and request original assets only when needed. |
+| Level-editor tooling | Editor validation should reuse the production schema. | Implement after the loader validation API is stable. |
 
 ---
 
-## System 4: Game Initialization with Levels
+## 9. Required Tests and Acceptance Criteria
 
-### 4.1 Modify TowerConquestGame to Load Levels
+The PR must pass the existing project quality gate and include focused coverage for the new foundation.
 
-Update the `TowerConquestGame` class to load levels instead of hard-coding the 2-node map:
+| Area | Required evidence |
+|---|---|
+| JSON parsing | A valid two-node level parses to immutable typed data. |
+| String validation | Invalid building types and factions are rejected with a meaningful error. |
+| Structural validation | Duplicate node IDs, invalid links, self-links, duplicate links, missing player/enemy nodes, out-of-bounds positions, invalid starting units, and non-Tier-1 authored nodes are rejected. |
+| Balance integration | A runtime node factory supplies the correct `generationRate`, `maxCapacity`, and `defenseMultiplier` for all four building types. |
+| Link resolution | Valid authored link IDs resolve to the intended `PathLink` endpoints. |
+| Fallback | A missing/unreadable requested level can use the explicit safe fallback path; malformed content remains observable. |
+| Regression | The default loaded level has two Barracks nodes, one link, starting garrisons of 10, and preserves the current game loop. |
+| Quality | `dart format --set-exit-if-changed lib test`, `flutter analyze lib test`, `flutter test`, and `flutter build web --release` all pass. |
 
-```dart
-class TowerConquestGame extends FlameGame with HasCollisionDetection {
-  late LevelData currentLevel;
-  late LevelManager levelManager;
-  late CampaignManager campaignManager;
-  late PlayerProgress playerProgress;
-  
-  @override
-  Future<void> onLoad() async {
-    await super.onLoad();
-    
-    // Initialize managers
-    levelManager = LevelManager();
-    campaignManager = CampaignManager();
-    playerProgress = PlayerProgress();
-    
-    await playerProgress.load();
-    await campaignManager.initialize();
-    
-    // Load the current level
-    currentLevel = await campaignManager.getCurrentLevel();
-    
-    // Create buildings from level data
-    for (final nodeData in currentLevel.nodes) {
-      final building = Building(
-        id: nodeData.id,
-        type: nodeData.type,
-        faction: nodeData.faction,
-        position: nodeData.position,
-        tier: nodeData.tier,
-      );
-      add(building);
-    }
-    
-    // Initialize AI with the current level
-    enemyCommander = EnemyCommander(
-      difficulty: currentLevel.difficulty,
-      targetNodes: currentLevel.nodes.where((n) => n.faction == Faction.player).toList(),
-    );
-  }
-  
-  void completeLevel(bool victory) {
-    if (victory) {
-      final rewards = currentLevel.rewards;
-      playerProgress.totalGold += rewards.gold;
-      playerProgress.totalGems += rewards.gems;
-      playerProgress.totalExperience += rewards.experience;
-      playerProgress.completedLevels[currentLevel.id] = true;
-      playerProgress.save();
-      
-      // Show victory screen with rewards
-      showVictoryScreen(rewards);
-    } else {
-      // Show defeat screen with retry option
-      showDefeatScreen();
-    }
-  }
-}
-```
+The test report must distinguish **visible test cases** from hidden suite-loading events. The baseline before this work is 204 visible cases, 16 loading events, and 220 successful total events; the PR should report its updated count using the same distinction.
 
 ---
 
-## System 5: Level Editor Infrastructure
+## 10. Non-Negotiable Guardrails
 
-### 5.1 Level Editor Workflow
-
-The orchestrator (you) will use a simple JSON editor to create levels. The developer provides:
-
-1. **Level JSON Template** – A starter template with all required fields.
-2. **Level Validator** – A command-line tool to validate level JSON files.
-3. **Level Preview Tool** – A simple debug screen that renders a level without playing it.
-
-### 5.2 Level Validator
-
-Create a `tools/validate_level.dart` script:
-
-```dart
-import 'dart:convert';
-import 'dart:io';
-
-void main(List<String> args) {
-  if (args.isEmpty) {
-    print('Usage: dart validate_level.dart <level_file.json>');
-    exit(1);
-  }
-  
-  final file = File(args[0]);
-  if (!file.existsSync()) {
-    print('Error: File not found: ${args[0]}');
-    exit(1);
-  }
-  
-  try {
-    final json = jsonDecode(file.readAsStringSync());
-    
-    // Validate required fields
-    final requiredFields = ['id', 'name', 'campaign', 'levelNumber', 'nodes', 'rewards'];
-    for (final field in requiredFields) {
-      if (!json.containsKey(field)) {
-        print('Error: Missing required field: $field');
-        exit(1);
-      }
-    }
-    
-    // Validate nodes
-    final nodes = json['nodes'] as List;
-    if (nodes.isEmpty) {
-      print('Error: Level must have at least one node');
-      exit(1);
-    }
-    
-    final nodeIds = <String>{};
-    for (final node in nodes) {
-      if (nodeIds.contains(node['id'])) {
-        print('Error: Duplicate node ID: ${node['id']}');
-        exit(1);
-      }
-      nodeIds.add(node['id'] as String);
-    }
-    
-    print('✓ Level validation passed: ${json['id']}');
-  } catch (e) {
-    print('Error: Invalid JSON: $e');
-    exit(1);
-  }
-}
-```
+1. Do not introduce `BuildingType` or `Faction` enums in Stage 1.
+2. Do not add a `Building.id` field or constructor parameter merely to match JSON node IDs.
+3. Do not alter the `Building` constructor defaults or claim they are required arguments.
+4. Do not change `BuildingBalance.baseStatsFor()` visibility; it is already public.
+5. Do not add `difficulty` or `targetNodes` arguments to `EnemyCommander`.
+6. Do not add a nonexistent `NormalAIStrategy(aggressiveness: ...)` API without a separate reviewed difficulty-design stage.
+7. Do not implement research, persistent progression, new assets, obstacle mechanics, hazards, or campaign UI in this PR.
+8. Do not use mutable research-effect closures in later stages; modifiers must be recomputed from base values and the set of unlocked research IDs.
+9. Do not weaken existing game-loop behavior or remove established test coverage.
 
 ---
 
-## Implementation Stages
+## 11. Pull Request Handoff Format
 
-### Stage 1: Level Definition & Loading (Week 1–2)
+Open a focused PR titled:
 
-- Implement `LevelData`, `NodeData`, and related classes.
-- Implement `LevelManager` with JSON loading and validation.
-- Create 5 Campaign 1 level JSON files.
-- Update `TowerConquestGame` to load levels dynamically.
-- Add tests for level loading and validation.
+> `Phase 3 Stage 1: data-driven level definition and loading`
 
-**Acceptance Criteria:**
-- ✅ `LevelManager.loadLevel()` successfully loads and parses JSON files.
-- ✅ Level validation catches duplicate node IDs and missing factions.
-- ✅ Game boots with Campaign 1 Level 1 loaded.
-- ✅ All 5 Campaign 1 levels load without errors.
+The PR description must state the level schema, default-level migration behavior, validation behavior, test-count breakdown, quality-gate output, and any deliberately deferred fields. It must explicitly confirm that the implementation preserves String-based type/faction values and uses the existing `AIStrategy` injection seam without adding unreviewed difficulty behavior.
 
-### Stage 2: Campaign & Meta-Progression (Week 2–3)
-
-- Implement `CampaignManager` and `PlayerProgress`.
-- Implement persistent storage via `SharedPreferences`.
-- Implement `ResearchTree` and research unlocks.
-- Create Campaign 2–4 level JSON files (25 total).
-- Add level completion tracking and reward distribution.
-
-**Acceptance Criteria:**
-- ✅ `CampaignManager` tracks current campaign and level.
-- ✅ Completing a level awards Gold, Gems, and Experience.
-- ✅ Research unlocks persist across app restarts.
-- ✅ All 30 levels load without errors.
-
-### Stage 3: Level Editor Infrastructure & Testing (Week 3–4)
-
-- Create level JSON template and validator tool.
-- Add level preview debug screen (optional).
-- Write 20+ tests covering level loading, validation, and progression.
-- Ensure all quality gates pass (format, analysis, tests, release build).
-
-**Acceptance Criteria:**
-- ✅ `tools/validate_level.dart` validates all 30 level JSON files.
-- ✅ 40–50 new tests cover level loading, campaign progression, and meta-progression.
-- ✅ All 220+ existing tests still pass.
-- ✅ `dart format`, `flutter analyze`, `flutter test`, `flutter build web --release` all pass.
-
----
-
-## Testing Strategy
-
-### Unit Tests
-
-- Test `LevelManager.loadLevel()` with valid and invalid JSON.
-- Test `LevelData.fromJson()` with edge cases (missing fields, invalid types).
-- Test `CampaignManager` level progression and campaign transitions.
-- Test `PlayerProgress` save/load with `SharedPreferences`.
-- Test `ResearchTree` unlock logic and cost deduction.
-
-### Integration Tests
-
-- Test loading a full level and instantiating all buildings.
-- Test completing a level and verifying reward distribution.
-- Test meta-progression persistence across game restarts.
-- Test campaign progression from Campaign 1 Level 1 to Campaign 4 Level 30.
-
-### Contract Tests
-
-- Verify that all 30 level JSON files conform to the schema.
-- Verify that each level has at least one player and one enemy node.
-- Verify that node positions are within map bounds.
-
----
-
-## File Structure
-
-```
-tower_conquest_repo/
-├── lib/
-│   ├── game/
-│   │   ├── managers/
-│   │   │   ├── level_manager.dart (NEW)
-│   │   │   ├── campaign_manager.dart (NEW)
-│   │   │   └── player_progress.dart (NEW)
-│   │   ├── models/
-│   │   │   └── level_data.dart (NEW)
-│   │   ├── systems/
-│   │   │   └── research_tree.dart (NEW)
-│   │   └── tower_conquest_game.dart (MODIFIED)
-├── assets/
-│   └── levels/ (NEW)
-│       ├── campaign_1_level_1.json
-│       ├── campaign_1_level_2.json
-│       ├── ... (30 total)
-│       └── campaign_4_level_30.json
-├── tools/
-│   └── validate_level.dart (NEW)
-└── test/
-    ├── level_manager_test.dart (NEW)
-    ├── campaign_manager_test.dart (NEW)
-    ├── player_progress_test.dart (NEW)
-    └── ... (40–50 new tests)
-```
-
----
-
-## Acceptance Criteria Checklist
-
-Phase 3 is complete when:
-
-- ✅ All 30 level JSON files are created and validated.
-- ✅ `LevelManager` loads and parses levels dynamically.
-- ✅ `CampaignManager` tracks campaign and level progression.
-- ✅ `PlayerProgress` persists Gold, Gems, and Experience across sessions.
-- ✅ `ResearchTree` allows players to unlock permanent upgrades.
-- ✅ Game boots with Campaign 1 Level 1 and progresses through all 30 levels.
-- ✅ Completing a level awards rewards and unlocks the next level.
-- ✅ All 123 existing Phase 1 tests still pass.
-- ✅ All 220 existing Phase 2 tests still pass.
-- ✅ 40–50 new tests cover level loading, campaign progression, and meta-progression.
-- ✅ Total test count: 280–310 tests, all passing.
-- ✅ `dart format`, `flutter analyze`, `flutter test`, `flutter build web --release` all pass.
-- ✅ No performance regressions (60 FPS maintained).
-
----
-
-## Q&A
-
-**Q: How do I add obstacles and hazards to levels?**  
-A: Phase 3 includes placeholder classes (`ObstacleData`, `HazardData`) for future expansion. For now, obstacles and hazards are not rendered or functional—focus on node-based level design.
-
-**Q: Can I create levels with more than 6 nodes?**  
-A: Yes, the level system supports arbitrary node counts. However, keep in mind that more nodes increase complexity and AI computation time. Test performance with large maps.
-
-**Q: How do I adjust AI difficulty per level?**  
-A: Set the `difficulty` field in the level JSON to `'easy'`, `'normal'`, or `'hard'`. The `EnemyCommander` will adjust unit generation rates and upgrade frequency accordingly.
-
-**Q: Can I create time-limited levels?**  
-A: Yes, set the `timeLimit` field in the level JSON (in seconds). The game will display a countdown timer and end the level when time expires.
-
-**Q: How do I test a new level without playing through the entire campaign?**  
-A: Use the `LevelManager.loadLevel()` method directly in a test or debug screen to load and preview a specific level.
+Once the PR is opened, stop implementation work and request orchestrator review. Do not begin Stage 2 content production, research, obstacles, or asset generation until the Stage 1 PR is approved and merged.
 
 ---
 
 ## References
 
-- **Game Design Document:** `planning/01_design/01_GAME_DESIGN_DOCUMENT.md`
-- **Phase 2 Implementation Plan:** `planning/04_implementation/02_PHASE2_IMPLEMENTATION_PLAN.md`
-- **Phase 2 Developer Prompt:** `orchestrator/PHASE2_DEVELOPER_PROMPT.md`
-- **Flame Documentation:** https://flame-engine.org/
-- **Flutter SharedPreferences:** https://pub.dev/packages/shared_preferences
+- `lib/game/components/buildings/building.dart`
+- `lib/game/constants/balance.dart`
+- `lib/game/managers/enemy_commander.dart`
+- `lib/game/managers/normal_ai_strategy.dart`
+- `lib/game/tower_conquest_game.dart`
+- `orchestrator/PHASE3_ARCHITECTURE_AUDIT.md`
+- `planning/02_systems/01_GAMEPLAY_SYSTEMS_BALANCE.md`
