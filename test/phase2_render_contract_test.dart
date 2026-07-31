@@ -145,7 +145,7 @@ void main() {
       expect(building.detailSprite, isNotNull);
     });
 
-        test('upgrading swaps in this tier\'s sprites', () async {
+    test('upgrading swaps in this tier\'s sprites', () async {
       final building = _barracks(unitsInside: 50);
       await building.onLoad();
       final spriteBefore = building.baseSprite;
