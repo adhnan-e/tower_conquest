@@ -1,0 +1,34 @@
+{
+  "id": "campaign_1_level_1",
+  "name": "First Contact",
+  "campaign": 1,
+  "levelNumber": 1,
+  "description": "Capture the opposing command position in a simple two-node match.",
+  "difficulty": "normal",
+  "width": 800,
+  "height": 600,
+  "nodes": [
+    {
+      "id": "player_base",
+      "type": "barracks",
+      "faction": "player",
+      "position": { "x": 0, "y": 220 },
+      "tier": 1,
+      "unitsInside": 10
+    },
+    {
+      "id": "enemy_base",
+      "type": "barracks",
+      "faction": "enemy",
+      "position": { "x": 0, "y": -220 },
+      "tier": 1,
+      "unitsInside": 10
+    }
+  ],
+  "links": [
+    { "from": "player_base", "to": "enemy_base" }
+  ],
+  "winCondition": "capture_all_enemy_nodes",
+  "timeLimitSeconds": null,
+  "rewards": { "gold": 0, "gems": 0, "experience": 0 }
+}

@@ -9,6 +9,9 @@ import 'components/map/path_link.dart';
 import 'components/units/unit.dart';
 import 'managers/asset_manager.dart';
 import 'managers/enemy_commander.dart';
+import 'managers/level_manager.dart';
+import 'managers/level_runtime_factory.dart';
+import 'models/level_data.dart';
 import 'screens/building_info_panel.dart';
 import 'screens/result_overlay.dart';
 
@@ -17,17 +20,13 @@ enum GameStatus { playing, victory, defeat }
 
 /// The game: one player node, one enemy node, a visible route between them,
 /// the full core loop from GDD §2 — generate, deploy, travel, engage, capture
-/// — building upgrades (Tiers 1-5), and a tactical AI opponent.
+/// — building upgrades (Tiers 1-5), a tactical AI opponent, and a
+/// data-driven level loaded through [LevelManager].
 ///
-/// Still ahead: additional building types actually placed in a level,
-/// multi-node maps, and level loading from JSON
-/// (`05_levels/01_LEVEL_DESIGN.md` §5).
+/// Still ahead: a campaign catalog beyond the single default level, and the
+/// meta-progression, obstacle, and hazard systems Phase 3 defers to later
+/// stages.
 class TowerConquestGame extends FlameGame with HasCollisionDetection {
-  /// World-space offset of each node from the centre of the screen. Positions
-  /// are relative to the origin rather than to `size`, so the layout stays
-  /// centred on any screen without a resize handler.
-  static const double _nodeOffsetY = 220;
-
   static final Vector2 _buildingSize = Vector2.all(96);
   static final Vector2 _unitSize = Vector2.all(20);
 
@@ -37,8 +36,8 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
   /// Every node on the map, player-owned or not.
   final List<Building> nodes = [];
 
-  /// Every route on the map. In Milestone 2 this is built from the level's
-  /// `paths` array (`05_levels/01_LEVEL_DESIGN.md` §5) rather than hard-coded.
+  /// Every route on the map, resolved from the loaded level's [LinkData] by
+  /// [LevelRuntimeFactory.linksFor].
   final List<PathLink> paths = [];
 
   /// The tactical opponent, driving [nodes] it owns via an [AIStrategy] —
@@ -234,28 +233,40 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
     return null;
   }
 
+  /// Loads the default level and builds it into the world. A malformed or
+  /// missing level asset falls back to [LevelManager.defaultLevel] rather
+  /// than taking the game down — see [LevelManager.loadOrFallback].
   Future<void> _buildLevel() async {
-    // Tier 1 Barracks stats from balance §1.1: capacity 50, 1.0 units/s.
-    playerBase = Building(
-      type: 'barracks',
-      tier: 1,
-      faction: 'player',
-      position: Vector2(0, _nodeOffsetY),
-      size: _buildingSize,
-      unitsInside: 10,
-    )..onTapped = _onBuildingTapped;
+    final level =
+        await LevelManager().loadOrFallback(LevelManager.defaultLevelId);
+    await _loadLevel(level);
+  }
 
-    enemyBase = Building(
-      type: 'barracks',
-      tier: 1,
-      faction: 'enemy',
-      position: Vector2(0, -_nodeOffsetY),
-      size: _buildingSize,
-      unitsInside: 10,
-    )..onTapped = _onBuildingTapped;
+  /// Instantiates every node and route [level] declares, via
+  /// [LevelRuntimeFactory], and mounts them into the world.
+  ///
+  /// [playerBase]/[enemyBase] stay as the first node found for each faction —
+  /// existing code and tests depend on these two fields, and Stage 1's
+  /// default level still has exactly one of each, so this preserves current
+  /// behaviour exactly. A level with more than one node per faction is not
+  /// yet supported by anything that reads these two fields.
+  Future<void> _loadLevel(LevelData level) async {
+    final buildingsByNodeId = <String, Building>{};
 
-    nodes.addAll([playerBase, enemyBase]);
-    paths.add(PathLink(a: playerBase, b: enemyBase));
+    for (final node in level.nodes) {
+      final building = LevelRuntimeFactory.buildingFor(
+        node,
+        size: _buildingSize,
+        onTapped: _onBuildingTapped,
+      );
+      buildingsByNodeId[node.id] = building;
+      nodes.add(building);
+    }
+
+    paths.addAll(LevelRuntimeFactory.linksFor(level, buildingsByNodeId));
+
+    playerBase = nodes.firstWhere((n) => n.faction == 'player');
+    enemyBase = nodes.firstWhere((n) => n.faction == 'enemy');
 
     await world.addAll([...paths, ...nodes]);
   }
