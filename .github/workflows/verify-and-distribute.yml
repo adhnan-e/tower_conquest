@@ -1,0 +1,148 @@
+name: Verify & Distribute
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      distribute_to_firebase:
+        description: "Distribute to Firebase App Distribution"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      tester_groups:
+        description: "Firebase tester groups (comma-separated)"
+        required: false
+        default: ""
+        type: string
+      release_notes:
+        description: "Release notes for distribution"
+        required: false
+        default: "Automated build from GitHub Actions"
+        type: string
+
+jobs:
+  verify:
+    name: Verify & Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.8"
+          channel: "stable"
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Format check
+        run: dart format --set-exit-if-changed lib test
+
+      - name: Analyze
+        run: flutter analyze lib test
+
+      - name: Run tests
+        run: flutter test --file-reporter=json:/tmp/test_results.json
+
+      - name: Build web (release verification)
+        run: flutter build web --release
+
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.44.8"
+          channel: "stable"
+
+      - name: Get dependencies
+        run: flutter pub get
+
+      - name: Build APK (release mode)
+        run: flutter build apk --release
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tower-conquest-release.apk
+          path: build/app/outputs/apk/release/app-release.apk
+          retention-days: 7
+
+  distribute-firebase:
+    name: Distribute to Firebase App Distribution
+    runs-on: ubuntu-latest
+    needs: build-android
+    if: |
+      (github.event_name == 'workflow_dispatch' && github.event.inputs.distribute_to_firebase == 'true') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tower-conquest-release.apk
+          path: ./
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "18"
+
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools@15.25.1
+
+      - name: Create service account credentials file
+        run: |
+          printf '%s' "$FIREBASE_SERVICE_ACCOUNT_JSON" > /tmp/firebase-key.json
+          jq empty /tmp/firebase-key.json
+        env:
+          FIREBASE_SERVICE_ACCOUNT_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JSON }}
+
+      - name: Distribute to Firebase App Distribution
+        run: |
+          export GOOGLE_APPLICATION_CREDENTIALS=/tmp/firebase-key.json
+          firebase appdistribution:distribute app-release.apk \
+            --app "${{ secrets.FIREBASE_APP_ID }}" \
+            --release-notes "${{ github.event.inputs.release_notes || format('Build {0} from {1}', github.sha, github.ref_name) }}" \
+            --groups "${{ github.event.inputs.tester_groups || 'qa-team' }}"
+        env:
+          GOOGLE_APPLICATION_CREDENTIALS: /tmp/firebase-key.json
+
+      - name: Clean up credentials
+        if: always()
+        run: rm -f /tmp/firebase-key.json
+
+      - name: Post distribution summary
+        if: success()
+        run: |
+          echo "✅ APK distributed to Firebase App Distribution"
+          echo "App ID: ${{ secrets.FIREBASE_APP_ID }}"
+          echo "Commit: ${{ github.sha }}"
+          echo "Branch: ${{ github.ref_name }}"
