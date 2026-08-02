@@ -1,3 +1,4 @@
+import 'package:flame_test/flame_test.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:tower_conquest/game/screens/result_overlay.dart';
@@ -8,11 +9,23 @@ import 'package:tower_conquest/game/tower_conquest_game.dart';
 /// The status is set directly rather than played out: what the overlay does
 /// with a finished match is this file's concern, and *reaching* victory or
 /// defeat through capture is already covered in `game_boot_test.dart`.
+///
+/// Goes through [initializeGame] rather than a bare `TowerConquestGame()` so
+/// `onLoad` actually runs and registers every overlay entry — Stage 2's
+/// "Play Again" test calls [TowerConquestGame.restart], which now adds the
+/// presentation overlays `_loadLevel` owns, and `OverlayManager.add` asserts
+/// on an overlay id nothing ever registered via `addEntry`.
+///
+/// `onLoad` decodes real sprites and reads a real JSON asset — genuine
+/// platform-channel I/O that never resolves under `testWidgets`'s fake-async
+/// zone unless run through [WidgetTester.runAsync].
 Future<TowerConquestGame> _pumpOverlay(
   WidgetTester tester,
   GameStatus outcome,
 ) async {
-  final game = TowerConquestGame()..status = outcome;
+  final game =
+      await tester.runAsync(() => initializeGame(TowerConquestGame.new));
+  game!.status = outcome;
 
   await tester.pumpWidget(
     MaterialApp(home: Scaffold(body: ResultOverlay(game: game))),
