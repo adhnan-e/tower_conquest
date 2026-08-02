@@ -5,6 +5,7 @@ import 'package:flame/game.dart';
 
 import 'constants/asset_paths.dart';
 import 'components/buildings/building.dart';
+import 'components/map/path_feedback_layer.dart';
 import 'components/map/path_link.dart';
 import 'components/units/unit.dart';
 import 'managers/asset_manager.dart';
@@ -13,7 +14,11 @@ import 'managers/level_manager.dart';
 import 'managers/level_runtime_factory.dart';
 import 'models/level_data.dart';
 import 'screens/building_info_panel.dart';
+import 'screens/gesture_hint_system.dart';
+import 'screens/level_progress_banner.dart';
+import 'screens/restart_button.dart';
 import 'screens/result_overlay.dart';
+import 'screens/win_condition_overlay.dart';
 
 /// How a match ended, or that it is still running.
 enum GameStatus { playing, victory, defeat }
@@ -32,6 +37,11 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
 
   late Building playerBase;
   late Building enemyBase;
+
+  /// The level currently loaded — set by [_loadLevel]. Read by the Stage 2
+  /// presentation overlays (name/campaign/level number, win condition, the
+  /// gesture hints' first-level gate); nothing here mutates it.
+  late LevelData currentLevel;
 
   /// Every node on the map, player-owned or not.
   final List<Building> nodes = [];
@@ -94,6 +104,25 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
     overlays.addEntry(
       BuildingInfoPanel.id,
       (_, __) => BuildingInfoPanel(game: this),
+    );
+
+    // Stage 2 presentation overlays: added for the duration of a live match
+    // in [_loadLevel], removed alongside each other in [_endMatch].
+    overlays.addEntry(
+      LevelProgressBanner.id,
+      (_, __) => LevelProgressBanner(game: this),
+    );
+    overlays.addEntry(
+      WinConditionOverlay.id,
+      (_, __) => WinConditionOverlay(game: this),
+    );
+    overlays.addEntry(
+      GestureHintSystem.id,
+      (_, __) => GestureHintSystem(game: this),
+    );
+    overlays.addEntry(
+      RestartButton.id,
+      (_, __) => RestartButton(game: this),
     );
 
     // Driven by a component rather than an `update` override: a root FlameGame
@@ -208,6 +237,11 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
   void _endMatch(GameStatus outcome) {
     status = outcome;
     _select(null);
+
+    overlays.remove(LevelProgressBanner.id);
+    overlays.remove(WinConditionOverlay.id);
+    overlays.remove(GestureHintSystem.id);
+    overlays.remove(RestartButton.id);
     overlays.add(ResultOverlay.id);
   }
 
@@ -251,6 +285,8 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
   /// behaviour exactly. A level with more than one node per faction is not
   /// yet supported by anything that reads these two fields.
   Future<void> _loadLevel(LevelData level) async {
+    currentLevel = level;
+
     final buildingsByNodeId = <String, Building>{};
 
     for (final node in level.nodes) {
@@ -268,7 +304,12 @@ class TowerConquestGame extends FlameGame with HasCollisionDetection {
     playerBase = nodes.firstWhere((n) => n.faction == 'player');
     enemyBase = nodes.firstWhere((n) => n.faction == 'enemy');
 
-    await world.addAll([...paths, ...nodes]);
+    await world.addAll([...paths, ...nodes, PathFeedbackLayer(paths)]);
+
+    overlays.add(LevelProgressBanner.id);
+    overlays.add(WinConditionOverlay.id);
+    overlays.add(GestureHintSystem.id);
+    overlays.add(RestartButton.id);
   }
 
   /// Clears the current selection, exactly as tapping the selected node again
